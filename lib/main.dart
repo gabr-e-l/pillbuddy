@@ -1,3 +1,4 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
@@ -24,6 +25,7 @@ class PillBuddyApp extends StatelessWidget {
         useMaterial3: true,
         fontFamily: 'Roboto',
       ),
+      // Centers the mobile-width content on wide web screens
       builder: (context, child) {
         return Center(
           child: ConstrainedBox(

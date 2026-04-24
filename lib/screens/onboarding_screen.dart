@@ -1,4 +1,7 @@
+// lib/screens/onboarding_screen.dart
 import 'package:flutter/material.dart';
+import 'home_screen.dart';
+import 'login_screen.dart';
 import 'signup_screen.dart';
 
 class OnboardingScreen extends StatelessWidget {
@@ -34,9 +37,9 @@ class OnboardingScreen extends StatelessWidget {
             ),
 
             // Dot indicators
-            Row(
+            const Row(
               mainAxisAlignment: MainAxisAlignment.center,
-              children: const [
+              children: [
                 _DotIndicator(isActive: false),
                 SizedBox(width: 6),
                 _DotIndicator(isActive: false),
@@ -48,10 +51,10 @@ class OnboardingScreen extends StatelessWidget {
             const SizedBox(height: 28),
 
             // Title & subtitle
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32),
               child: Column(
-                children: const [
+                children: [
                   Text(
                     'For yourself, family and friends',
                     textAlign: TextAlign.center,
@@ -78,7 +81,7 @@ class OnboardingScreen extends StatelessWidget {
 
             const SizedBox(height: 32),
 
-            // CLIENT button → navigates to SignUpScreen
+            // CLIENT button → Free Browse to Home Page
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: SizedBox(
@@ -86,7 +89,11 @@ class OnboardingScreen extends StatelessWidget {
                 height: 52,
                 child: ElevatedButton(
                   onPressed: () {
-                    // TODO: Navigate to Admin Login screen
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const PillBuddyHome()),
+                    );
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1A6BFF),
@@ -110,7 +117,7 @@ class OnboardingScreen extends StatelessWidget {
 
             const SizedBox(height: 14),
 
-            // Admin Login (placeholder)
+            // Admin Login button → navigates to Login Screen
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: SizedBox(
@@ -121,7 +128,7 @@ class OnboardingScreen extends StatelessWidget {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => const SignUpScreen()),
+                          builder: (context) => const LoginScreen()),
                     );
                   },
                   style: OutlinedButton.styleFrom(
@@ -150,16 +157,10 @@ class OnboardingScreen extends StatelessWidget {
   }
 }
 
-// ── Profile bubbles widget ──────────────────────────────────────────────────
+// ── Profile bubbles widget (Private) ──────────────────────────────────────────
 
 class _ProfileBubblesWidget extends StatelessWidget {
-  static const List<String?> _avatarAssets = [
-    null, // top-center  → replace with 'assets/images/avatar1.jpg'
-    null, // left        → replace with 'assets/images/avatar2.jpg'
-    null, // right       → replace with 'assets/images/avatar3.jpg'
-    null, // center      → replace with 'assets/images/avatar4.jpg'
-  ];
-
+  static const List<String?> _avatarAssets = [null, null, null, null];
   static const List<IconData> _fallbackIcons = [
     Icons.person,
     Icons.elderly,
@@ -299,8 +300,6 @@ class _ProfileBubble extends StatelessWidget {
     );
   }
 }
-
-// ── Dot indicator ───────────────────────────────────────────────────────────
 
 class _DotIndicator extends StatelessWidget {
   final bool isActive;
