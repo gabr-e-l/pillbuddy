@@ -4,49 +4,73 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   User? get currentUser => _auth.currentUser;
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
-  /// Register a new admin account and store their profile in Firestore.
-  Future<UserCredential> registerAdmin({
+  // ── Register ───────────────────────────────────────────────────────────────
+
+  Future<UserCredential> registerPatient({
     required String name,
     required String email,
     required String password,
   }) async {
-    final credential = await _auth.createUserWithEmailAndPassword(
+    final cred = await _auth.createUserWithEmailAndPassword(
       email: email,
       password: password,
     );
-
-    await credential.user!.updateDisplayName(name);
-
-    await _firestore.collection('admins').doc(credential.user!.uid).set({
-      'uid': credential.user!.uid,
+    await cred.user!.updateDisplayName(name);
+    await _db.collection('users').doc(cred.user!.uid).set({
+      'uid': cred.user!.uid,
       'name': name,
       'email': email,
-      'role': 'admin',
+      'role': 'patient',
+      'avatarIndex': 0,
       'createdAt': FieldValue.serverTimestamp(),
     });
-
-    return credential;
+    return cred;
   }
 
-  /// Sign in an existing admin account with email and password.
+  Future<UserCredential> registerCaregiver({
+    required String name,
+    required String email,
+    required String password,
+  }) async {
+    final cred = await _auth.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+    await cred.user!.updateDisplayName(name);
+    await _db.collection('users').doc(cred.user!.uid).set({
+      'uid': cred.user!.uid,
+      'name': name,
+      'email': email,
+      'role': 'caregiver',
+      'avatarIndex': 0,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    return cred;
+  }
+
+  // ── Sign In ────────────────────────────────────────────────────────────────
+
   Future<UserCredential> signInWithEmailAndPassword({
     required String email,
     required String password,
   }) async {
-    final credential = await _auth.signInWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-    return credential;
+    return _auth.signInWithEmailAndPassword(email: email, password: password);
   }
 
-  /// Sign out the current user.
-  Future<void> signOut() async {
-    await _auth.signOut();
+  // ── Role fetch ─────────────────────────────────────────────────────────────
+
+  /// Returns 'patient', 'caregiver', or null if not found.
+  Future<String?> fetchRole(String uid) async {
+    final doc = await _db.collection('users').doc(uid).get();
+    return doc.data()?['role'] as String?;
   }
+
+  // ── Sign Out ───────────────────────────────────────────────────────────────
+
+  Future<void> signOut() async => _auth.signOut();
 }

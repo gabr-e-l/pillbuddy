@@ -1,6 +1,12 @@
 // lib/screens/onboarding_screen.dart
+//
+// Changes:
+//   - "CLIENT" → "Sign up as Patient"  → SignUpScreen(role: 'patient')
+//   - "Admin Login" → "Sign up as Caregiver" → SignUpScreen(role: 'caregiver')
+//   - Added "Already have an account? Sign In" link at the bottom.
+
 import 'package:flutter/material.dart';
-import 'home_screen.dart';
+import 'package:flutter/gestures.dart';
 import 'login_screen.dart';
 import 'signup_screen.dart';
 
@@ -31,12 +37,10 @@ class OnboardingScreen extends StatelessWidget {
 
             const SizedBox(height: 8),
 
-            // Profile bubbles illustration
-            Expanded(
-              child: _ProfileBubblesWidget(),
-            ),
+            // Illustration
+            Expanded(child: _ProfileBubblesWidget()),
 
-            // Dot indicators
+            // Dots
             const Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
@@ -81,20 +85,19 @@ class OnboardingScreen extends StatelessWidget {
 
             const SizedBox(height: 32),
 
-            // CLIENT button → Free Browse to Home Page
+            // ── Sign up as Patient ───────────────────────────────────────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: SizedBox(
                 width: double.infinity,
                 height: 52,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const PillBuddyHome()),
-                    );
-                  },
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SignUpScreen(role: 'patient'),
+                    ),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1A6BFF),
                     shape: RoundedRectangleBorder(
@@ -102,14 +105,20 @@ class OnboardingScreen extends StatelessWidget {
                     ),
                     elevation: 0,
                   ),
-                  child: const Text(
-                    'CLIENT',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white,
-                      letterSpacing: 1.1,
-                    ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.person_outline, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Sign up as Patient',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -117,39 +126,74 @@ class OnboardingScreen extends StatelessWidget {
 
             const SizedBox(height: 14),
 
-            // Admin Login button → navigates to Login Screen
+            // ── Sign up as Caregiver ─────────────────────────────────────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: SizedBox(
                 width: double.infinity,
                 height: 52,
                 child: OutlinedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const LoginScreen()),
-                    );
-                  },
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const SignUpScreen(role: 'caregiver'),
+                    ),
+                  ),
                   style: OutlinedButton.styleFrom(
-                    side: BorderSide.none,
+                    side: const BorderSide(
+                        color: Color(0xFF1A6BFF), width: 1.5),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(30),
                     ),
                   ),
-                  child: const Text(
-                    'Admin Login',
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Colors.black45,
-                      fontWeight: FontWeight.w500,
-                    ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.medical_services_outlined,
+                          color: Color(0xFF1A6BFF), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Sign up as Caregiver',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1A6BFF),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 20),
+
+            // ── Already have an account ──────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.only(bottom: 28),
+              child: RichText(
+                text: TextSpan(
+                  style: const TextStyle(
+                      fontSize: 14, color: Colors.black45),
+                  children: [
+                    const TextSpan(text: 'Already have an account?  '),
+                    TextSpan(
+                      text: 'Sign In',
+                      style: const TextStyle(
+                        color: Color(0xFF1A6BFF),
+                        fontWeight: FontWeight.w600,
+                      ),
+                      recognizer: TapGestureRecognizer()
+                        ..onTap = () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const LoginScreen()),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -157,11 +201,10 @@ class OnboardingScreen extends StatelessWidget {
   }
 }
 
-// ── Profile bubbles widget (Private) ──────────────────────────────────────────
+// ── Profile bubbles illustration ──────────────────────────────────────────────
 
 class _ProfileBubblesWidget extends StatelessWidget {
-  static const List<String?> _avatarAssets = [null, null, null, null];
-  static const List<IconData> _fallbackIcons = [
+  static const List<IconData> _icons = [
     Icons.person,
     Icons.elderly,
     Icons.face,
@@ -177,53 +220,23 @@ class _ProfileBubblesWidget extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            _buildRing(220, const Color(0xFFDDE4F0)),
-            _buildRing(160, const Color(0xFFCDD7EE)),
+            _ring(220, const Color(0xFFDDE4F0)),
+            _ring(160, const Color(0xFFCDD7EE)),
             Positioned(
-              top: 80,
-              left: 90,
-              child: _ProfileBubble(
-                size: 88,
-                assetPath: _avatarAssets[3],
-                fallbackIcon: _fallbackIcons[3],
-                borderColor: Colors.white,
-                borderWidth: 4,
-              ),
+              top: 80, left: 90,
+              child: _bubble(88, _icons[3], false),
             ),
             Positioned(
-              top: 0,
-              left: 110,
-              child: _ProfileBubble(
-                size: 56,
-                assetPath: _avatarAssets[0],
-                fallbackIcon: _fallbackIcons[0],
-                borderColor: Colors.white,
-                borderWidth: 3,
-              ),
+              top: 0, left: 110,
+              child: _bubble(56, _icons[0], false),
             ),
             Positioned(
-              top: 90,
-              left: 10,
-              child: _ProfileBubble(
-                size: 62,
-                assetPath: _avatarAssets[1],
-                fallbackIcon: _fallbackIcons[1],
-                borderColor: Colors.white,
-                borderWidth: 3,
-                grayscale: true,
-              ),
+              top: 90, left: 10,
+              child: _bubble(62, _icons[1], true),
             ),
             Positioned(
-              top: 70,
-              right: 8,
-              child: _ProfileBubble(
-                size: 62,
-                assetPath: _avatarAssets[2],
-                fallbackIcon: _fallbackIcons[2],
-                borderColor: Colors.white,
-                borderWidth: 3,
-                grayscale: true,
-              ),
+              top: 70, right: 8,
+              child: _bubble(62, _icons[2], true),
             ),
           ],
         ),
@@ -231,62 +244,36 @@ class _ProfileBubblesWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildRing(double size, Color color) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: color.withOpacity(0.45),
-      ),
-    );
-  }
-}
+  Widget _ring(double size, Color color) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withOpacity(0.45),
+        ),
+      );
 
-class _ProfileBubble extends StatelessWidget {
-  final double size;
-  final String? assetPath;
-  final IconData fallbackIcon;
-  final Color borderColor;
-  final double borderWidth;
-  final bool grayscale;
-
-  const _ProfileBubble({
-    required this.size,
-    required this.assetPath,
-    required this.fallbackIcon,
-    required this.borderColor,
-    required this.borderWidth,
-    this.grayscale = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    Widget avatar = CircleAvatar(
+  Widget _bubble(double size, IconData icon, bool grey) {
+    Widget w = CircleAvatar(
       radius: size / 2,
       backgroundColor: const Color(0xFFCDD7EE),
-      backgroundImage: assetPath != null ? AssetImage(assetPath!) : null,
-      child: assetPath == null
-          ? Icon(fallbackIcon, size: size * 0.45, color: Colors.white70)
-          : null,
+      child: Icon(icon, size: size * 0.45, color: Colors.white70),
     );
-
-    if (grayscale) {
-      avatar = ColorFiltered(
+    if (grey) {
+      w = ColorFiltered(
         colorFilter: const ColorFilter.matrix([
           0.2126, 0.7152, 0.0722, 0, 0,
           0.2126, 0.7152, 0.0722, 0, 0,
           0.2126, 0.7152, 0.0722, 0, 0,
           0,      0,      0,      1, 0,
         ]),
-        child: avatar,
+        child: w,
       );
     }
-
     return Container(
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: borderColor, width: borderWidth),
+        border: Border.all(color: Colors.white, width: 3),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.08),
@@ -295,8 +282,7 @@ class _ProfileBubble extends StatelessWidget {
           ),
         ],
       ),
-      child: ClipOval(
-          child: SizedBox(width: size, height: size, child: avatar)),
+      child: ClipOval(child: SizedBox(width: size, height: size, child: w)),
     );
   }
 }

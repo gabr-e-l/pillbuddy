@@ -1,8 +1,19 @@
 // lib/screens/splash_screen.dart
+//
+// Changes:
+//   - After the animation, checks FirebaseAuth for a logged-in user.
+//   - If logged in: fetches their role from Firestore and routes to the
+//     correct home (PatientHome or CaregiverHome).
+//   - If not logged in: goes to OnboardingCarousel as before.
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../services/auth_service.dart';
 import 'onboarding_carousel_screen.dart';
+import 'patient_home.dart';
+import 'caregiver_home.dart';
 
 class PillBuddySplash extends StatefulWidget {
   const PillBuddySplash({super.key});
@@ -42,21 +53,47 @@ class _PillBuddySplashState extends State<PillBuddySplash>
 
     _controller.forward();
 
-    // Transition to OnboardingCarousel after 3 seconds
-    Timer(const Duration(seconds: 3), () {
+    Timer(const Duration(seconds: 3), _navigate);
+  }
+
+  Future<void> _navigate() async {
+    if (!mounted) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      // Not signed in → onboarding
+      _push(const OnboardingCarousel());
+      return;
+    }
+
+    // Signed in → fetch role and route accordingly
+    try {
+      final role = await AuthService().fetchRole(user.uid);
       if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        PageRouteBuilder(
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              const OnboardingCarousel(),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-          transitionDuration: const Duration(milliseconds: 800),
-        ),
-      );
-    });
+      if (role == 'caregiver') {
+        _push(const CaregiverHome());
+      } else {
+        // 'patient' or any unknown role → patient home
+        _push(const PatientHome());
+      }
+    } catch (_) {
+      if (!mounted) return;
+      // If role fetch fails fall back to onboarding
+      _push(const OnboardingCarousel());
+    }
+  }
+
+  void _push(Widget screen) {
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => screen,
+        transitionsBuilder: (_, animation, __, child) =>
+            FadeTransition(opacity: animation, child: child),
+        transitionDuration: const Duration(milliseconds: 800),
+      ),
+    );
   }
 
   @override
