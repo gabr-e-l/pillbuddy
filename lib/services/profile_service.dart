@@ -1,8 +1,4 @@
 // lib/services/profile_service.dart
-//
-// Reads and writes the user profile stored at:
-//   users/{uid}/profile  (single document)
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -16,30 +12,28 @@ class ProfileService {
     return _db.collection('users').doc(uid);
   }
 
-  /// Save (merge) profile fields into the user document.
   Future<void> saveProfile({
     required String name,
     DateTime? dateOfBirth,
     required String gender,
     required int avatarIndex,
+    String? profileImageUrl,
   }) async {
     await _profileRef.set({
       'name': name,
-      'dateOfBirth':
-          dateOfBirth != null ? Timestamp.fromDate(dateOfBirth) : null,
+      'dateOfBirth': dateOfBirth != null ? Timestamp.fromDate(dateOfBirth) : null,
       'gender': gender,
       'avatarIndex': avatarIndex,
+      'profileImageUrl': profileImageUrl,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
 
-  /// Fetch the profile once and return it as a Map.
   Future<Map<String, dynamic>?> getProfile() async {
     final doc = await _profileRef.get();
     return doc.data();
   }
 
-  /// Real-time stream of the profile document.
   Stream<Map<String, dynamic>?> profileStream() {
     return _profileRef.snapshots().map((doc) => doc.data());
   }

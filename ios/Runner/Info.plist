@@ -66,5 +66,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+
+	<key>NSCameraUsageDescription</key>
+	<string>PillBuddy needs camera access to take photos of your medications.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>PillBuddy needs photo library access to choose medication and profile photos.</string>
 </dict>
 </plist>

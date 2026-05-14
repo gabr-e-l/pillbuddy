@@ -6,6 +6,7 @@
 //   - Cannot add / edit / delete medications
 //   - Can view their profile and sign out from Settings
 
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/medication_model.dart';
@@ -220,10 +221,37 @@ class _TodayTabState extends State<_TodayTab> {
           );
         }
 
-        final meds = medSnap.data ?? [];
+        final allMeds = medSnap.data ?? [];
+
+        // Filter meds active on selectedDate (respects startDate, stopDate,
+        // selectedWeekDays, and selectedMonthDays via isActiveOn)
+        final meds = allMeds
+            .where((med) => med.isActiveOn(_selectedDate))
+            .toList();
+
+        if (meds.isEmpty && allMeds.isEmpty) {
+          return _buildEmptyState();
+        }
 
         if (meds.isEmpty) {
-          return _buildEmptyState();
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.event_available_outlined, size: 64, color: Colors.grey[300]),
+                const SizedBox(height: 12),
+                const Text(
+                  'No medications on this date',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black45),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Check a different date',
+                  style: TextStyle(fontSize: 13, color: Colors.black38),
+                ),
+              ],
+            ),
+          );
         }
 
         return StreamBuilder<Map<String, String>>(
@@ -299,11 +327,11 @@ class _TodayTabState extends State<_TodayTab> {
 
 // ── Medication card ───────────────────────────────────────────────────────────
 
-class _MedCard extends StatelessWidget {
+class _MedCard extends StatefulWidget {
   final MedicationModel med;
   final String? status; // null = not yet acted on
   final DateTime selectedDate;
-  final void Function(String? status) onStatusChanged;
+  final Future<void> Function(String? status) onStatusChanged;
 
   const _MedCard({
     required this.med,
@@ -312,8 +340,33 @@ class _MedCard extends StatelessWidget {
     required this.onStatusChanged,
   });
 
+  @override
+  State<_MedCard> createState() => _MedCardState();
+}
+
+class _MedCardState extends State<_MedCard> {
+  String? _localStatus;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _localStatus = widget.status;
+  }
+
+  @override
+  void didUpdateWidget(_MedCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.status != widget.status) {
+      _localStatus = widget.status;
+    }
+  }
+
+  MedicationModel get med => widget.med;
+
+
   Color get _statusColor {
-    return switch (status) {
+    return switch (_localStatus) {
       'taken' => const Color(0xFF2BC8A7),
       'taken_late' => const Color(0xFFFFA726),
       'skipped' => const Color(0xFFEF5350),
@@ -323,7 +376,7 @@ class _MedCard extends StatelessWidget {
   }
 
   String get _statusLabel {
-    return switch (status) {
+    return switch (_localStatus) {
       'taken' => 'Taken ✓',
       'taken_late' => 'Taken Late',
       'skipped' => 'Skipped',
@@ -332,11 +385,49 @@ class _MedCard extends StatelessWidget {
     };
   }
 
+  static Widget _buildMedImage(String imageUrl) {
+    if (imageUrl.startsWith('data:')) {
+      try {
+        final b64 = imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
+        return Image.memory(
+          base64Decode(b64),
+          width: 40, height: 40, fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+        );
+      } catch (_) {}
+    }
+    return const SizedBox.shrink();
+  }
+
+  Future<void> _handleStatusChange(BuildContext context, String? newStatus) async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _localStatus = newStatus; // optimistic update
+    });
+    try {
+      await widget.onStatusChanged(newStatus);
+    } catch (e) {
+      // Revert optimistic update on failure
+      setState(() => _localStatus = widget.status);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not save: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   void _showActionSheet(BuildContext context) {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (_) => Container(
+      builder: (sheetContext) => Container(
         decoration: const BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -375,8 +466,8 @@ class _MedCard extends StatelessWidget {
               label: 'Taken',
               subtitle: 'I took it on time',
               onTap: () {
-                Navigator.pop(context);
-                onStatusChanged('taken');
+                Navigator.pop(sheetContext);
+                _handleStatusChange(context, 'taken');
               },
             ),
             _ActionTile(
@@ -385,8 +476,8 @@ class _MedCard extends StatelessWidget {
               label: 'Taken Late',
               subtitle: 'I took it, but late',
               onTap: () {
-                Navigator.pop(context);
-                onStatusChanged('taken_late');
+                Navigator.pop(sheetContext);
+                _handleStatusChange(context, 'taken_late');
               },
             ),
             _ActionTile(
@@ -395,8 +486,8 @@ class _MedCard extends StatelessWidget {
               label: 'Snoozed',
               subtitle: 'Remind me later',
               onTap: () {
-                Navigator.pop(context);
-                onStatusChanged('snoozed');
+                Navigator.pop(sheetContext);
+                _handleStatusChange(context, 'snoozed');
               },
             ),
             _ActionTile(
@@ -405,19 +496,19 @@ class _MedCard extends StatelessWidget {
               label: 'Skipped',
               subtitle: 'I did not take it',
               onTap: () {
-                Navigator.pop(context);
-                onStatusChanged('skipped');
+                Navigator.pop(sheetContext);
+                _handleStatusChange(context, 'skipped');
               },
             ),
-            if (status != null)
+            if (_localStatus != null)
               _ActionTile(
                 icon: Icons.undo_outlined,
                 color: Colors.black38,
                 label: 'Undo',
                 subtitle: 'Clear this record',
                 onTap: () {
-                  Navigator.pop(context);
-                  onStatusChanged(null);
+                  Navigator.pop(sheetContext);
+                  _handleStatusChange(context, null);
                 },
               ),
           ],
@@ -434,7 +525,7 @@ class _MedCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: status != null
+        border: _localStatus != null
             ? Border.all(color: _statusColor.withOpacity(0.4), width: 1.5)
             : null,
       ),
@@ -472,22 +563,36 @@ class _MedCard extends StatelessWidget {
 
           // Med info
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: [
-                Text(
-                  med.name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+                if (med.imageUrl != null && med.imageUrl!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: _buildMedImage(med.imageUrl!),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '${med.dose} ${med.unit}  ·  ${med.type}',
-                  style: const TextStyle(
-                      fontSize: 12, color: Colors.black45),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        med.name,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${med.dose} ${med.unit}  ·  ${med.type}',
+                        style: const TextStyle(
+                            fontSize: 12, color: Colors.black45),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -495,7 +600,7 @@ class _MedCard extends StatelessWidget {
 
           // Status button
           GestureDetector(
-            onTap: () => _showActionSheet(context),
+            onTap: _saving ? null : () => _showActionSheet(context),
             child: Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: 12, vertical: 8),
@@ -503,7 +608,16 @@ class _MedCard extends StatelessWidget {
                 color: _statusColor.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: Text(
+              child: _saving
+                  ? SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: _statusColor,
+                      ),
+                    )
+                  : Text(
                 _statusLabel,
                 style: TextStyle(
                   fontSize: 12,
@@ -603,58 +717,100 @@ class _PatientSettingsTab extends StatelessWidget {
             const SizedBox(height: 24),
 
             // Profile card
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                children: [
-                  const CircleAvatar(
+            StreamBuilder<Map<String, dynamic>?>(
+              stream: ProfileService().profileStream(),
+              builder: (context, snap) {
+                final profileData = snap.data;
+                final displayName = (profileData?['name'] as String?)?.isNotEmpty == true
+                    ? profileData!['name'] as String
+                    : user?.displayName ?? 'Patient';
+                final profileImageUrl = profileData?['profileImageUrl'] as String?;
+
+                Widget avatarWidget;
+                if (profileImageUrl != null && profileImageUrl.startsWith('data:')) {
+                  try {
+                    final b64 = profileImageUrl.contains(',')
+                        ? profileImageUrl.split(',').last
+                        : profileImageUrl;
+                    avatarWidget = CircleAvatar(
+                      radius: 28,
+                      backgroundImage: MemoryImage(base64Decode(b64)),
+                    );
+                  } catch (_) {
+                    avatarWidget = const CircleAvatar(
+                      radius: 28,
+                      backgroundColor: Color(0xFF3B71FE),
+                      child: Icon(Icons.person_outline, color: Colors.white, size: 28),
+                    );
+                  }
+                } else {
+                  avatarWidget = CircleAvatar(
                     radius: 28,
-                    backgroundColor: Color(0xFF3B71FE),
-                    child: Icon(Icons.person_outline,
-                        color: Colors.white, size: 28),
+                    backgroundColor: const Color(0xFF3B71FE),
+                    child: Text(
+                      displayName.isNotEmpty ? displayName[0].toUpperCase() : 'P',
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+                    ),
+                  );
+                }
+
+                return GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ProfileSettingsScreen()),
                   ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
                       children: [
-                        Text(
-                          user?.displayName ?? 'Patient',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+                        avatarWidget,
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                displayName,
+                                style: const TextStyle(
+                                    fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                user?.email ?? '',
+                                style: const TextStyle(
+                                    fontSize: 13, color: Colors.black45),
+                              ),
+                            ],
                           ),
                         ),
-                        Text(
-                          user?.email ?? '',
-                          style: const TextStyle(
-                              fontSize: 13, color: Colors.black45),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE8F0FF),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Text(
+                            'Patient',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF3B71FE),
+                                fontWeight: FontWeight.w700),
+                          ),
                         ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.edit_outlined,
+                            size: 18, color: Colors.black38),
                       ],
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE8F0FF),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Text(
-                      'Patient',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF3B71FE),
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+                );
+              },
             ),
 
             const SizedBox(height: 16),
