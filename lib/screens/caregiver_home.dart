@@ -16,6 +16,7 @@ import '../services/auth_service.dart';
 import '../services/profile_service.dart';
 import 'add_patient_screen.dart';
 import 'caregiver_patient_meds_screen.dart';
+import 'caregiver_intake_history_screen.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
 
@@ -349,6 +350,43 @@ class _PatientCard extends StatelessWidget {
                         ),
                       );
                     },
+                  ),
+                  const SizedBox(height: 8),
+                  // Intake Updates quick-link
+                  GestureDetector(
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => CaregiverIntakeHistoryScreen(
+                          patientUid: patientUid,
+                          patientName: patientName,
+                        ),
+                      ),
+                    ),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3B71FE).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.history_rounded,
+                              size: 13, color: Color(0xFF3B71FE)),
+                          SizedBox(width: 4),
+                          Text(
+                            'Intake Updates',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Color(0xFF3B71FE),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),

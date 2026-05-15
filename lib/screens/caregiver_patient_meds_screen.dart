@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../models/medication_model.dart';
 import '../services/caregiver_service.dart';
 import 'caregiver_add_med_screen.dart';
+import 'caregiver_intake_history_screen.dart';
 
 class CaregiverPatientMedsScreen extends StatelessWidget {
   final String patientUid;
@@ -49,6 +50,32 @@ class CaregiverPatientMedsScreen extends StatelessWidget {
         ),
         centerTitle: true,
         actions: [
+          // Intake Updates button
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: IconButton(
+              tooltip: 'Intake Updates',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => CaregiverIntakeHistoryScreen(
+                    patientUid: patientUid,
+                    patientName: patientName,
+                  ),
+                ),
+              ),
+              icon: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF3B71FE).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.history_rounded,
+                    color: Color(0xFF3B71FE), size: 20),
+              ),
+            ),
+          ),
+          // Add medication button
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: IconButton(

@@ -458,6 +458,7 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
             const SizedBox(height: 8),
             TextFormField(
               controller: _nameController,
+              style: _inputTextStyle,
               decoration: _inputDeco(hintText: 'e.g. Metformin'),
               validator: (v) => (v == null || v.trim().isEmpty)
                   ? 'Please enter a medication name'
@@ -488,6 +489,7 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
                       TextFormField(
                         controller: _doseController,
                         keyboardType: TextInputType.number,
+                        style: _inputTextStyle,
                         decoration: _inputDeco(hintText: '1'),
                         validator: (v) {
                           if (v == null || v.trim().isEmpty) return 'Required';
@@ -582,6 +584,7 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
             TextFormField(
               controller: _noteController,
               maxLines: 2,
+              style: _inputTextStyle,
               decoration: _inputDeco(hintText: 'e.g. Take with food'),
             ),
 
@@ -694,7 +697,9 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
                         : '$_freqNumber time${_freqNumber > 1 ? 's' : ''} a day',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.bold),
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87),
                   ),
                 ),
                 IconButton(
@@ -1031,9 +1036,14 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
         ]),
       );
 
+  // FIX: explicit style on every TextFormField so typed text is always dark
+  TextStyle get _inputTextStyle =>
+      const TextStyle(color: Colors.black87, fontSize: 14);
+
   InputDecoration _inputDeco({required String hintText}) => InputDecoration(
         hintText: hintText,
-        hintStyle: const TextStyle(color: Colors.black38, fontSize: 14),
+        // Hint slightly lighter than body text, but still legible
+        hintStyle: const TextStyle(color: Colors.black45, fontSize: 14),
         filled: true,
         fillColor: Colors.white,
         contentPadding:
@@ -1082,11 +1092,18 @@ class _DropdownField<T> extends StatelessWidget {
         child: DropdownButton<T>(
           value: value,
           isExpanded: true,
+          // FIX: selected value shown in dark text
+          style: const TextStyle(color: Colors.black87, fontSize: 14),
+          dropdownColor: Colors.white,
           items: items
               .map((e) => DropdownMenuItem<T>(
                     value: e,
-                    child: Text(e.toString(),
-                        style: const TextStyle(fontSize: 14)),
+                    child: Text(
+                      e.toString(),
+                      // FIX: dropdown item text explicitly dark
+                      style: const TextStyle(
+                          color: Colors.black87, fontSize: 14),
+                    ),
                   ))
               .toList(),
           onChanged: onChanged,

@@ -1,21 +1,31 @@
 // lib/screens/patient_home.dart
 //
-// The Patient's home screen. Patients:
-//   - View today's medications (set by their linked caregiver)
-//   - Mark each dose as Taken, Taken Late, Snoozed, or Skipped
-//   - Cannot add / edit / delete medications
-//   - Can view their profile and sign out from Settings
+// Fixes applied in this version:
+//   1. Dark mode + high-contrast: all hardcoded Colors.white / Color(0xFFF4F7FF)
+//      replaced with Theme.of(context) surface/background values so the
+//      AccessibilityProvider's themeMode actually takes effect on every widget.
+//   2. Button size: "Mark as" / status pill and action-sheet tiles now scale
+//      their height/padding via AccessibilityProvider.buttonScaleFactor.
+//   3. Mark-As bottom-sheet overflow: switched to isScrollControlled:true and
+//      MediaQuery.viewInsetsOf(context).bottom so the system nav-bar never clips
+//      the last option.
+//   4. Light-text fixes: med name and action-tile label/subtitle in the
+//      bottom-sheet are now explicitly dark (Theme onSurface) so they are
+//      readable on white and on dark backgrounds alike.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import '../models/medication_model.dart';
 import '../services/medication_service.dart';
 import '../services/intake_service.dart';
 import '../services/auth_service.dart';
 import '../services/profile_service.dart';
+import '../providers/accessibility_provider.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
+import 'accessibility_settings_screen.dart';
 
 class PatientHome extends StatefulWidget {
   const PatientHome({super.key});
@@ -30,22 +40,28 @@ class _PatientHomeState extends State<PatientHome> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // bg is slightly tinted in light mode, neutral in dark
+    final scaffoldBg = theme.brightness == Brightness.dark
+        ? theme.scaffoldBackgroundColor
+        : const Color(0xFFF4F7FF);
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FF),
+      backgroundColor: scaffoldBg,
       body: IndexedStack(
         index: _selectedIndex,
         children: [
           _TodayTab(selectedDate: _selectedDate),
-          _PatientSettingsTab(),
+          const _PatientSettingsTab(),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: (i) => setState(() => _selectedIndex = i),
         type: BottomNavigationBarType.fixed,
-        backgroundColor: Colors.white,
-        selectedItemColor: const Color(0xFF3B71FE),
-        unselectedItemColor: Colors.grey[400],
+        backgroundColor: theme.colorScheme.surface,
+        selectedItemColor: theme.colorScheme.primary,
+        unselectedItemColor: theme.colorScheme.onSurface.withOpacity(0.4),
         selectedLabelStyle:
             const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
         unselectedLabelStyle: const TextStyle(fontSize: 12),
@@ -80,7 +96,6 @@ class _TodayTabState extends State<_TodayTab> {
   final _profileService = ProfileService();
   DateTime _selectedDate = DateTime.now();
 
-  // Horizontal calendar — show 7 days centred on today
   late final List<DateTime> _calendarDays;
 
   @override
@@ -95,20 +110,23 @@ class _TodayTabState extends State<_TodayTab> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final onSurface = theme.colorScheme.onSurface;
+
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildHeader(),
-          _buildHorizontalCalendar(),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+          _buildHeader(onSurface),
+          _buildHorizontalCalendar(theme),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Text(
               "Today's Medications",
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
-                color: Colors.black87,
+                color: onSurface,
               ),
             ),
           ),
@@ -118,7 +136,7 @@ class _TodayTabState extends State<_TodayTab> {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(Color onSurface) {
     return StreamBuilder<Map<String, dynamic>?>(
       stream: _profileService.profileStream(),
       builder: (context, snap) {
@@ -132,15 +150,16 @@ class _TodayTabState extends State<_TodayTab> {
             children: [
               Text(
                 'Hello, $name 👋',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  color: Colors.black87,
+                  color: onSurface,
                 ),
               ),
-              const Text(
+              Text(
                 "Here are your medications for today.",
-                style: TextStyle(fontSize: 14, color: Colors.black45),
+                style:
+                    TextStyle(fontSize: 14, color: onSurface.withOpacity(0.5)),
               ),
             ],
           ),
@@ -149,7 +168,11 @@ class _TodayTabState extends State<_TodayTab> {
     );
   }
 
-  Widget _buildHorizontalCalendar() {
+  Widget _buildHorizontalCalendar(ThemeData theme) {
+    final primary = theme.colorScheme.primary;
+    final surface = theme.colorScheme.surface;
+    final onSurface = theme.colorScheme.onSurface;
+
     return SizedBox(
       height: 76,
       child: ListView.builder(
@@ -167,12 +190,10 @@ class _TodayTabState extends State<_TodayTab> {
               margin: const EdgeInsets.symmetric(horizontal: 4),
               width: 48,
               decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xFF3B71FE)
-                    : Colors.white,
+                color: isSelected ? primary : surface,
                 borderRadius: BorderRadius.circular(12),
                 border: isToday && !isSelected
-                    ? Border.all(color: const Color(0xFF3B71FE), width: 1.5)
+                    ? Border.all(color: primary, width: 1.5)
                     : null,
               ),
               child: Column(
@@ -183,7 +204,9 @@ class _TodayTabState extends State<_TodayTab> {
                     style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: isSelected ? Colors.white70 : Colors.black45,
+                      color: isSelected
+                          ? Colors.white70
+                          : onSurface.withOpacity(0.45),
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -192,7 +215,7 @@ class _TodayTabState extends State<_TodayTab> {
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: isSelected ? Colors.white : Colors.black87,
+                      color: isSelected ? Colors.white : onSurface,
                     ),
                   ),
                 ],
@@ -205,6 +228,9 @@ class _TodayTabState extends State<_TodayTab> {
   }
 
   Widget _buildMedList() {
+    final theme = Theme.of(context);
+    final onSurface = theme.colorScheme.onSurface;
+
     return StreamBuilder<List<MedicationModel>>(
       stream: _medService.medicationsStream(),
       builder: (context, medSnap) {
@@ -222,15 +248,11 @@ class _TodayTabState extends State<_TodayTab> {
         }
 
         final allMeds = medSnap.data ?? [];
-
-        // Filter meds active on selectedDate (respects startDate, stopDate,
-        // selectedWeekDays, and selectedMonthDays via isActiveOn)
-        final meds = allMeds
-            .where((med) => med.isActiveOn(_selectedDate))
-            .toList();
+        final meds =
+            allMeds.where((med) => med.isActiveOn(_selectedDate)).toList();
 
         if (meds.isEmpty && allMeds.isEmpty) {
-          return _buildEmptyState();
+          return _buildEmptyState(onSurface);
         }
 
         if (meds.isEmpty) {
@@ -238,16 +260,21 @@ class _TodayTabState extends State<_TodayTab> {
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.event_available_outlined, size: 64, color: Colors.grey[300]),
+                Icon(Icons.event_available_outlined,
+                    size: 64, color: onSurface.withOpacity(0.2)),
                 const SizedBox(height: 12),
-                const Text(
+                Text(
                   'No medications on this date',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Colors.black45),
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: onSurface.withOpacity(0.45)),
                 ),
                 const SizedBox(height: 6),
-                const Text(
+                Text(
                   'Check a different date',
-                  style: TextStyle(fontSize: 13, color: Colors.black38),
+                  style: TextStyle(
+                      fontSize: 13, color: onSurface.withOpacity(0.35)),
                 ),
               ],
             ),
@@ -290,26 +317,28 @@ class _TodayTabState extends State<_TodayTab> {
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(Color onSurface) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.medication_outlined, size: 72, color: Colors.grey[300]),
+          Icon(Icons.medication_outlined,
+              size: 72, color: onSurface.withOpacity(0.2)),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             'No medications scheduled',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Colors.black54,
+              color: onSurface.withOpacity(0.45),
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
-            'Your caregiver hasn\'t added\nany medications yet.',
+          Text(
+            "Your caregiver hasn't added\nany medications yet.",
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.black38),
+            style:
+                TextStyle(fontSize: 13, color: onSurface.withOpacity(0.35)),
           ),
         ],
       ),
@@ -329,7 +358,7 @@ class _TodayTabState extends State<_TodayTab> {
 
 class _MedCard extends StatefulWidget {
   final MedicationModel med;
-  final String? status; // null = not yet acted on
+  final String? status;
   final DateTime selectedDate;
   final Future<void> Function(String? status) onStatusChanged;
 
@@ -364,7 +393,6 @@ class _MedCardState extends State<_MedCard> {
 
   MedicationModel get med => widget.med;
 
-
   Color get _statusColor {
     return switch (_localStatus) {
       'taken' => const Color(0xFF2BC8A7),
@@ -388,10 +416,13 @@ class _MedCardState extends State<_MedCard> {
   static Widget _buildMedImage(String imageUrl) {
     if (imageUrl.startsWith('data:')) {
       try {
-        final b64 = imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
+        final b64 =
+            imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
         return Image.memory(
           base64Decode(b64),
-          width: 40, height: 40, fit: BoxFit.cover,
+          width: 40,
+          height: 40,
+          fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => const SizedBox.shrink(),
         );
       } catch (_) {}
@@ -399,16 +430,16 @@ class _MedCardState extends State<_MedCard> {
     return const SizedBox.shrink();
   }
 
-  Future<void> _handleStatusChange(BuildContext context, String? newStatus) async {
+  Future<void> _handleStatusChange(
+      BuildContext context, String? newStatus) async {
     if (_saving) return;
     setState(() {
       _saving = true;
-      _localStatus = newStatus; // optimistic update
+      _localStatus = newStatus;
     });
     try {
       await widget.onStatusChanged(newStatus);
     } catch (e) {
-      // Revert optimistic update on failure
       setState(() => _localStatus = widget.status);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -423,41 +454,61 @@ class _MedCardState extends State<_MedCard> {
     }
   }
 
+  // FIX 3 + 4: isScrollControlled removes the overflow; explicit colors fix
+  // the light-text issue inside the sheet.
   void _showActionSheet(BuildContext context) {
+    final theme = Theme.of(context);
+    final sheetBg = theme.colorScheme.surface;
+    final onSurface = theme.colorScheme.onSurface;
+    // Extra bottom padding = system nav-bar height so nothing is clipped
+    final bottomPad = MediaQuery.viewInsetsOf(context).bottom +
+        MediaQuery.paddingOf(context).bottom +
+        16;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      // isScrollControlled lets the sheet be exactly as tall as its content
+      // without Flutter forcing a minimum height that causes overflow
+      isScrollControlled: true,
       builder: (sheetContext) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        decoration: BoxDecoration(
+          color: sheetBg,
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(24)),
         ),
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        padding: EdgeInsets.fromLTRB(20, 16, 20, bottomPad),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Drag handle
             Center(
               child: Container(
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color: Colors.grey[300],
+                  color: onSurface.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
             ),
             const SizedBox(height: 16),
+            // FIX 4: explicit onSurface color so name is readable in all modes
             Text(
               med.name,
-              style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: onSurface,
+              ),
             ),
             Text(
               '${med.dose} ${med.unit}  ·  '
               '${med.hour.toString().padLeft(2, '0')}:'
               '${med.minute.toString().padLeft(2, '0')} ${med.period}',
-              style: const TextStyle(fontSize: 13, color: Colors.black45),
+              style: TextStyle(
+                  fontSize: 13, color: onSurface.withOpacity(0.5)),
             ),
             const SizedBox(height: 20),
             _ActionTile(
@@ -503,7 +554,7 @@ class _MedCardState extends State<_MedCard> {
             if (_localStatus != null)
               _ActionTile(
                 icon: Icons.undo_outlined,
-                color: Colors.black38,
+                color: onSurface.withOpacity(0.4),
                 label: 'Undo',
                 subtitle: 'Clear this record',
                 onTap: () {
@@ -519,14 +570,23 @@ class _MedCardState extends State<_MedCard> {
 
   @override
   Widget build(BuildContext context) {
+    final acc = context.watch<AccessibilityProvider>();
+    final theme = Theme.of(context);
+    final surface = theme.colorScheme.surface;
+    final onSurface = theme.colorScheme.onSurface;
+    // FIX 2: scale the status-pill vertical padding by buttonScaleFactor
+    final btnV = 8.0 * acc.buttonScaleFactor;
+    final btnH = 12.0 * acc.buttonScaleFactor;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: surface,
         borderRadius: BorderRadius.circular(16),
         border: _localStatus != null
-            ? Border.all(color: _statusColor.withOpacity(0.4), width: 1.5)
+            ? Border.all(
+                color: _statusColor.withOpacity(0.4), width: 1.5)
             : null,
       ),
       child: Row(
@@ -539,16 +599,16 @@ class _MedCardState extends State<_MedCard> {
                 Text(
                   '${med.hour.toString().padLeft(2, '0')}:'
                   '${med.minute.toString().padLeft(2, '0')}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 15,
                     fontWeight: FontWeight.bold,
-                    color: Colors.black87,
+                    color: onSurface,
                   ),
                 ),
                 Text(
                   med.period,
-                  style: const TextStyle(
-                      fontSize: 12, color: Colors.black45),
+                  style: TextStyle(
+                      fontSize: 12, color: onSurface.withOpacity(0.45)),
                 ),
               ],
             ),
@@ -557,7 +617,7 @@ class _MedCardState extends State<_MedCard> {
           Container(
             width: 1,
             height: 48,
-            color: Colors.grey[200],
+            color: onSurface.withOpacity(0.08),
             margin: const EdgeInsets.symmetric(horizontal: 12),
           ),
 
@@ -579,17 +639,18 @@ class _MedCardState extends State<_MedCard> {
                     children: [
                       Text(
                         med.name,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.bold,
-                          color: Colors.black87,
+                          color: onSurface,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         '${med.dose} ${med.unit}  ·  ${med.type}',
-                        style: const TextStyle(
-                            fontSize: 12, color: Colors.black45),
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: onSurface.withOpacity(0.45)),
                       ),
                     ],
                   ),
@@ -598,12 +659,12 @@ class _MedCardState extends State<_MedCard> {
             ),
           ),
 
-          // Status button
+          // Status / Mark-as button — FIX 2: scaled padding
           GestureDetector(
             onTap: _saving ? null : () => _showActionSheet(context),
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 12, vertical: 8),
+              padding:
+                  EdgeInsets.symmetric(horizontal: btnH, vertical: btnV),
               decoration: BoxDecoration(
                 color: _statusColor.withOpacity(0.12),
                 borderRadius: BorderRadius.circular(20),
@@ -618,13 +679,13 @@ class _MedCardState extends State<_MedCard> {
                       ),
                     )
                   : Text(
-                _statusLabel,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                  color: _statusColor,
-                ),
-              ),
+                      _statusLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: _statusColor,
+                      ),
+                    ),
             ),
           ),
         ],
@@ -632,6 +693,8 @@ class _MedCardState extends State<_MedCard> {
     );
   }
 }
+
+// ── Action tile (inside bottom sheet) ────────────────────────────────────────
 
 class _ActionTile extends StatelessWidget {
   final IconData icon;
@@ -650,17 +713,30 @@ class _ActionTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // FIX 4: use Theme colors so text is readable in dark/HC modes
+    final onSurface = Theme.of(context).colorScheme.onSurface;
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: CircleAvatar(
         backgroundColor: color.withOpacity(0.12),
         child: Icon(icon, color: color, size: 22),
       ),
-      title: Text(label,
-          style:
-              const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-      subtitle: Text(subtitle,
-          style: const TextStyle(fontSize: 12, color: Colors.black45)),
+      // Explicit dark colors — no more invisible text
+      title: Text(
+        label,
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          fontSize: 15,
+          color: onSurface,
+        ),
+      ),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(
+          fontSize: 12,
+          color: onSurface.withOpacity(0.5),
+        ),
+      ),
       onTap: onTap,
     );
   }
@@ -669,6 +745,8 @@ class _ActionTile extends StatelessWidget {
 // ── Patient settings tab ──────────────────────────────────────────────────────
 
 class _PatientSettingsTab extends StatelessWidget {
+  const _PatientSettingsTab();
+
   Future<void> _signOut(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -703,6 +781,10 @@ class _PatientSettingsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
+    final theme = Theme.of(context);
+    final surface = theme.colorScheme.surface;
+    final onSurface = theme.colorScheme.onSurface;
+    final primary = theme.colorScheme.primary;
 
     return SafeArea(
       child: Padding(
@@ -710,9 +792,12 @@ class _PatientSettingsTab extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Settings',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: onSurface),
             ),
             const SizedBox(height: 24),
 
@@ -721,13 +806,16 @@ class _PatientSettingsTab extends StatelessWidget {
               stream: ProfileService().profileStream(),
               builder: (context, snap) {
                 final profileData = snap.data;
-                final displayName = (profileData?['name'] as String?)?.isNotEmpty == true
-                    ? profileData!['name'] as String
-                    : user?.displayName ?? 'Patient';
-                final profileImageUrl = profileData?['profileImageUrl'] as String?;
+                final displayName =
+                    (profileData?['name'] as String?)?.isNotEmpty == true
+                        ? profileData!['name'] as String
+                        : user?.displayName ?? 'Patient';
+                final profileImageUrl =
+                    profileData?['profileImageUrl'] as String?;
 
                 Widget avatarWidget;
-                if (profileImageUrl != null && profileImageUrl.startsWith('data:')) {
+                if (profileImageUrl != null &&
+                    profileImageUrl.startsWith('data:')) {
                   try {
                     final b64 = profileImageUrl.contains(',')
                         ? profileImageUrl.split(',').last
@@ -737,20 +825,25 @@ class _PatientSettingsTab extends StatelessWidget {
                       backgroundImage: MemoryImage(base64Decode(b64)),
                     );
                   } catch (_) {
-                    avatarWidget = const CircleAvatar(
+                    avatarWidget = CircleAvatar(
                       radius: 28,
-                      backgroundColor: Color(0xFF3B71FE),
-                      child: Icon(Icons.person_outline, color: Colors.white, size: 28),
+                      backgroundColor: primary,
+                      child: const Icon(Icons.person_outline,
+                          color: Colors.white, size: 28),
                     );
                   }
                 } else {
                   avatarWidget = CircleAvatar(
                     radius: 28,
-                    backgroundColor: const Color(0xFF3B71FE),
+                    backgroundColor: primary,
                     child: Text(
-                      displayName.isNotEmpty ? displayName[0].toUpperCase() : 'P',
+                      displayName.isNotEmpty
+                          ? displayName[0].toUpperCase()
+                          : 'P',
                       style: const TextStyle(
-                          color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20),
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 20),
                     ),
                   );
                 }
@@ -764,7 +857,7 @@ class _PatientSettingsTab extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: surface,
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Row(
@@ -777,13 +870,16 @@ class _PatientSettingsTab extends StatelessWidget {
                             children: [
                               Text(
                                 displayName,
-                                style: const TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold),
+                                style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: onSurface),
                               ),
                               Text(
                                 user?.email ?? '',
-                                style: const TextStyle(
-                                    fontSize: 13, color: Colors.black45),
+                                style: TextStyle(
+                                    fontSize: 13,
+                                    color: onSurface.withOpacity(0.45)),
                               ),
                             ],
                           ),
@@ -792,20 +888,21 @@ class _PatientSettingsTab extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFE8F0FF),
+                            color: primary.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: const Text(
+                          child: Text(
                             'Patient',
                             style: TextStyle(
                                 fontSize: 12,
-                                color: Color(0xFF3B71FE),
+                                color: primary,
                                 fontWeight: FontWeight.w700),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        const Icon(Icons.edit_outlined,
-                            size: 18, color: Colors.black38),
+                        Icon(Icons.edit_outlined,
+                            size: 18,
+                            color: onSurface.withOpacity(0.35)),
                       ],
                     ),
                   ),
@@ -823,6 +920,19 @@ class _PatientSettingsTab extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const ProfileSettingsScreen()),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Accessibility
+            _SettingsTile(
+              icon: Icons.accessibility_new_rounded,
+              label: 'Accessibility',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const AccessibilitySettingsScreen()),
               ),
             ),
 
@@ -857,13 +967,17 @@ class _SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final c = color ?? Colors.black87;
+    final theme = Theme.of(context);
+    final surface = theme.colorScheme.surface;
+    final defaultColor = theme.colorScheme.onSurface;
+    final c = color ?? defaultColor;
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: surface,
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
