@@ -26,6 +26,8 @@ import '../providers/accessibility_provider.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
 import 'accessibility_settings_screen.dart';
+import 'notification_settings_screen.dart';
+import '../services/notification_service.dart';
 
 class PatientHome extends StatefulWidget {
   const PatientHome({super.key});
@@ -94,6 +96,7 @@ class _TodayTabState extends State<_TodayTab> {
   final _medService = MedicationService();
   final _intakeService = IntakeService();
   final _profileService = ProfileService();
+  final _notifService = NotificationService();
   DateTime _selectedDate = DateTime.now();
 
   late final List<DateTime> _calendarDays;
@@ -106,6 +109,8 @@ class _TodayTabState extends State<_TodayTab> {
       14,
       (i) => today.subtract(Duration(days: 3 - i)),
     );
+    // Initialise local notifications when the patient home loads.
+    _notifService.init();
   }
 
   @override
@@ -250,6 +255,19 @@ class _TodayTabState extends State<_TodayTab> {
         final allMeds = medSnap.data ?? [];
         final meds =
             allMeds.where((med) => med.isActiveOn(_selectedDate)).toList();
+
+        // Schedule / refresh local reminders for all active medications.
+        for (final med in allMeds.where((m) => m.isActiveOn(DateTime.now()))) {
+          _notifService.schedulePatientReminder(
+            medId:   med.id ?? med.name,
+            medName: med.name,
+            dose:    med.dose,
+            unit:    med.unit,
+            hour:    med.hour,
+            minute:  med.minute,
+            period:  med.period,
+          );
+        }
 
         if (meds.isEmpty && allMeds.isEmpty) {
           return _buildEmptyState(onSurface);
@@ -933,6 +951,19 @@ class _PatientSettingsTab extends StatelessWidget {
                 context,
                 MaterialPageRoute(
                     builder: (_) => const AccessibilitySettingsScreen()),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Notifications
+            _SettingsTile(
+              icon: Icons.notifications_outlined,
+              label: 'Notification Settings',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const NotificationSettingsScreen()),
               ),
             ),
 

@@ -11,12 +11,17 @@ import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'providers/accessibility_provider.dart';
 import 'screens/splash_screen.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
+  // Initialise local notifications (registers channels, loads timezone data)
+  await NotificationService().init();
+  await NotificationService().requestPermission();
 
   // Load saved accessibility prefs before the first frame
   final accessibilityProvider = AccessibilityProvider();

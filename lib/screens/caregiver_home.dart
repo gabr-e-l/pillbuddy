@@ -8,6 +8,7 @@
 //   - Sign out from Settings tab
 
 import 'dart:convert';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/medication_model.dart';
@@ -19,6 +20,8 @@ import 'caregiver_patient_meds_screen.dart';
 import 'caregiver_intake_history_screen.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
+import 'notification_settings_screen.dart';
+import '../services/notification_service.dart';
 
 class CaregiverHome extends StatefulWidget {
   const CaregiverHome({super.key});
@@ -229,11 +232,26 @@ class _PatientsTab extends StatelessWidget {
 
 // ── Patient card ──────────────────────────────────────────────────────────────
 
-class _PatientCard extends StatelessWidget {
+class _PatientCard extends StatefulWidget {
   final Map<String, dynamic> patient;
-  final _service = CaregiverService();
 
-  _PatientCard({required this.patient});
+  const _PatientCard({required this.patient});
+
+  @override
+  State<_PatientCard> createState() => _PatientCardState();
+}
+
+class _PatientCardState extends State<_PatientCard> {
+  final _service = CaregiverService();
+  final _notifService = NotificationService();
+  // Track last known intake statuses to detect new changes
+  Map<String, String> _lastIntakes = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _notifService.init();
+  }
 
   void _confirmUnlink(BuildContext context) {
     showDialog(
@@ -243,7 +261,7 @@ class _PatientCard extends StatelessWidget {
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Remove Patient'),
         content: Text(
-            'Remove ${patient['name']} from your patient list?'),
+            'Remove ${widget.patient['name']} from your patient list?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -252,7 +270,7 @@ class _PatientCard extends StatelessWidget {
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              await _service.unlinkPatient(patient['uid'] as String);
+              await _service.unlinkPatient(widget.patient['uid'] as String);
             },
             child: const Text('Remove',
                 style: TextStyle(color: Colors.red)),
@@ -262,13 +280,41 @@ class _PatientCard extends StatelessWidget {
     );
   }
 
+  /// Called whenever the intake stream emits; fires a caregiver notification
+  /// for any newly changed intake statuses.
+  /// [newIntakes] maps medId → status; [medNames] maps medId → medName.
+  void _handleIntakeUpdate(
+      Map<String, String> newIntakes,
+      String patientUid,
+      String patientName, {
+      Map<String, String> medNames = const {},
+  }) {
+    for (final entry in newIntakes.entries) {
+      final medId   = entry.key;
+      final status  = entry.value;
+      if (_lastIntakes[medId] != status) {
+        // Only alert for taken / missed statuses
+        if (status == 'taken' || status == 'taken_late' || status == 'skipped') {
+          _notifService.notifyCaregiverIntakeUpdate(
+            patientUid:  patientUid,
+            patientName: patientName,
+            medName:     medNames[medId] ?? medId,
+            status:      status,
+            timestamp:   DateTime.now(),
+          );
+        }
+      }
+    }
+    _lastIntakes = Map.from(newIntakes);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final patientUid = patient['uid'] as String;
-    final patientName = (patient['name'] as String?)?.isNotEmpty == true
-        ? patient['name'] as String
+    final patientUid = widget.patient['uid'] as String;
+    final patientName = (widget.patient['name'] as String?)?.isNotEmpty == true
+        ? widget.patient['name'] as String
         : 'Patient';
-    final email = patient['email'] as String? ?? '';
+    final email = widget.patient['email'] as String? ?? '';
 
     return GestureDetector(
       onTap: () => Navigator.push(
@@ -352,7 +398,50 @@ class _PatientCard extends StatelessWidget {
                     },
                   ),
                   const SizedBox(height: 8),
-                  // Intake Updates quick-link
+                  // Intake Updates quick-link + caregiver notification listener
+                  StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('users')
+                        .doc(patientUid)
+                        .collection('intakes')
+                        .where('date', isEqualTo: () {
+                          final n = DateTime.now();
+                          final y = n.year;
+                          final mo = n.month.toString().padLeft(2, '0');
+                          final dy = n.day.toString().padLeft(2, '0');
+                          return '$y-$mo-$dy';
+                        }())
+                        .snapshots()
+                        .map((snap) => snap.docs
+                            .map((doc) => doc.data())
+                            .toList()),
+                    builder: (context, intakeSnap) {
+                      if (intakeSnap.hasData) {
+                        final docs = intakeSnap.data!;
+                        final statusMap = <String, String>{
+                          for (final d in docs)
+                            if (d['medId'] != null && d['status'] != null)
+                              d['medId'] as String: d['status'] as String,
+                        };
+                        final nameMap = <String, String>{
+                          for (final d in docs)
+                            if (d['medId'] != null && d['medName'] != null)
+                              d['medId'] as String: d['medName'] as String,
+                        };
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted) {
+                            _handleIntakeUpdate(
+                              statusMap,
+                              patientUid,
+                              patientName,
+                              medNames: nameMap,
+                            );
+                          }
+                        });
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
                   GestureDetector(
                     onTap: () => Navigator.push(
                       context,
@@ -586,6 +675,41 @@ class _CaregiverSettingsTab extends StatelessWidget {
                     Expanded(
                       child: Text(
                         'Edit Profile',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: Colors.black38, size: 20),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Notification Settings
+            GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) =>
+                      const NotificationSettingsScreen(isCaregiverMode: true),
+                ),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.notifications_outlined,
+                        color: Color(0xFF2BC8A7), size: 22),
+                    SizedBox(width: 14),
+                    Expanded(
+                      child: Text(
+                        'Notification Settings',
                         style: TextStyle(
                             fontSize: 15, fontWeight: FontWeight.w600),
                       ),
