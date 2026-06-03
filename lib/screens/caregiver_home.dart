@@ -1,27 +1,31 @@
 // lib/screens/caregiver_home.dart
 //
-// The Caregiver's home screen. Caregivers can:
-//   - See all linked patients
-//   - Add a patient by email
-//   - Tap a patient to manage their medications (add / edit / delete)
-//   - View patient adherence summary (taken / skipped counts for today)
-//   - Sign out from Settings tab
+// UPDATED:
+//   - Uses CaregiverThemeWrapper (no inline Theme+MediaQuery boilerplate).
+//   - Text sizes are NOT manually multiplied by fontScaleFactor — the
+//     MediaQuery textScaler in the wrapper already handles that.
+//   - Button heights are scaled via buttonScaleFactor.
+//   - All colours come from the theme's ColorScheme so dark/HC mode works.
 
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import '../models/medication_model.dart';
+import '../providers/caregiver_accessibility_provider.dart';
 import '../services/caregiver_service.dart';
 import '../services/auth_service.dart';
 import '../services/profile_service.dart';
+import '../services/notification_service.dart';
 import 'add_patient_screen.dart';
 import 'caregiver_patient_meds_screen.dart';
 import 'caregiver_intake_history_screen.dart';
+import 'caregiver_accessibility_settings_screen.dart';
+import 'caregiver_theme_wrapper.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
 import 'notification_settings_screen.dart';
-import '../services/notification_service.dart';
 
 class CaregiverHome extends StatefulWidget {
   const CaregiverHome({super.key});
@@ -35,35 +39,44 @@ class _CaregiverHomeState extends State<CaregiverHome> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FF),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: [
-          _PatientsTab(),
-          _CaregiverSettingsTab(),
-        ],
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (i) => setState(() => _selectedIndex = i),
-        backgroundColor: Colors.white,
-        selectedItemColor: const Color(0xFF2BC8A7),
-        unselectedItemColor: Colors.grey[400],
-        selectedLabelStyle:
-            const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-        unselectedLabelStyle: const TextStyle(fontSize: 12),
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.people_outline),
-            label: 'Patients',
+    return CaregiverThemeWrapper(
+      builder: (ctx, acc) {
+        final cs     = Theme.of(ctx).colorScheme;
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final bgColor = isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
+        final navBg   = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+
+        return Scaffold(
+          backgroundColor: bgColor,
+          body: IndexedStack(
+            index: _selectedIndex,
+            children: [
+              _PatientsTab(),
+              const _CaregiverSettingsTab(),
+            ],
           ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.settings_outlined),
-            label: 'Settings',
+          bottomNavigationBar: BottomNavigationBar(
+            currentIndex: _selectedIndex,
+            onTap: (i) => setState(() => _selectedIndex = i),
+            backgroundColor: navBg,
+            selectedItemColor: cs.primary,
+            unselectedItemColor: Colors.grey[400],
+            selectedLabelStyle:
+                const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+            unselectedLabelStyle: const TextStyle(fontSize: 12),
+            items: const [
+              BottomNavigationBarItem(
+                icon: Icon(Icons.people_outline),
+                label: 'Patients',
+              ),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.settings_outlined),
+                label: 'Settings',
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -75,10 +88,14 @@ class _PatientsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final acc  = context.watch<CaregiverAccessibilityProvider>();
+    final cs   = Theme.of(context).colorScheme;
     final user = FirebaseAuth.instance.currentUser;
     final name = user?.displayName?.isNotEmpty == true
         ? user!.displayName!
         : 'Caregiver';
+
+    final btnH = 40.0 * acc.buttonScaleFactor;
 
     return SafeArea(
       child: Column(
@@ -97,46 +114,51 @@ class _PatientsTab extends StatelessWidget {
                     children: [
                       Text(
                         'Hello, $name 👋',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.bold,
-                          color: Colors.black87,
+                          color: cs.onSurface,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      const Text(
+                      Text(
                         'Your patients',
-                        style: TextStyle(fontSize: 14, color: Colors.black45),
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: cs.onSurface.withValues(alpha: 0.5),
+                        ),
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
-                // Add patient button
-                ElevatedButton.icon(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const AddPatientScreen()),
-                  ),
-                  icon: const Icon(Icons.person_add_outlined,
-                      size: 18, color: Colors.white),
-                  label: const Text(
-                    'Add Patient',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2BC8A7),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
+                SizedBox(
+                  height: btnH,
+                  child: ElevatedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const AddPatientScreen()),
                     ),
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    icon: const Icon(Icons.person_add_outlined,
+                        size: 18, color: Colors.white),
+                    label: const Text(
+                      'Add Patient',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: cs.primary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
                   ),
                 ),
               ],
@@ -145,13 +167,14 @@ class _PatientsTab extends StatelessWidget {
 
           const SizedBox(height: 12),
 
-          // Patient list
           Expanded(
             child: StreamBuilder<List<Map<String, dynamic>>>(
               stream: _service.patientsStream(),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                  return Center(
+                      child:
+                          CircularProgressIndicator(color: cs.primary));
                 }
                 if (snap.hasError) {
                   return Center(
@@ -166,7 +189,7 @@ class _PatientsTab extends StatelessWidget {
                 final patients = snap.data ?? [];
 
                 if (patients.isEmpty) {
-                  return _buildEmptyState(context);
+                  return _buildEmptyState(context, acc, cs);
                 }
 
                 return ListView.builder(
@@ -183,45 +206,54 @@ class _PatientsTab extends StatelessWidget {
     );
   }
 
-  Widget _buildEmptyState(BuildContext context) {
+  Widget _buildEmptyState(BuildContext context,
+      CaregiverAccessibilityProvider acc, ColorScheme cs) {
+    final btnH = 48.0 * acc.buttonScaleFactor;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.people_outline, size: 72, color: Colors.grey[300]),
+          Icon(Icons.people_outline,
+              size: 72, color: cs.onSurface.withValues(alpha: 0.2)),
           const SizedBox(height: 16),
-          const Text(
+          Text(
             'No patients yet',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Colors.black54,
+              color: cs.onSurface.withValues(alpha: 0.5),
             ),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Tap "Add Patient" to link\nyour first patient.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.black38),
+            style: TextStyle(
+                fontSize: 13,
+                color: cs.onSurface.withValues(alpha: 0.35)),
           ),
           const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => const AddPatientScreen()),
-            ),
-            icon: const Icon(Icons.person_add_outlined, color: Colors.white),
-            label: const Text(
-              'Add Patient',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2BC8A7),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
+          SizedBox(
+            height: btnH,
+            child: ElevatedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const AddPatientScreen()),
               ),
-              elevation: 0,
+              icon: const Icon(Icons.person_add_outlined,
+                  color: Colors.white),
+              label: const Text('Add Patient',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 15)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: cs.primary,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20)),
+                elevation: 0,
+              ),
             ),
           ),
         ],
@@ -234,7 +266,6 @@ class _PatientsTab extends StatelessWidget {
 
 class _PatientCard extends StatefulWidget {
   final Map<String, dynamic> patient;
-
   const _PatientCard({required this.patient});
 
   @override
@@ -242,9 +273,8 @@ class _PatientCard extends StatefulWidget {
 }
 
 class _PatientCardState extends State<_PatientCard> {
-  final _service = CaregiverService();
+  final _service      = CaregiverService();
   final _notifService = NotificationService();
-  // Track last known intake statuses to detect new changes
   Map<String, String> _lastIntakes = {};
 
   @override
@@ -270,7 +300,8 @@ class _PatientCardState extends State<_PatientCard> {
           TextButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              await _service.unlinkPatient(widget.patient['uid'] as String);
+              await _service
+                  .unlinkPatient(widget.patient['uid'] as String);
             },
             child: const Text('Remove',
                 style: TextStyle(color: Colors.red)),
@@ -280,21 +311,19 @@ class _PatientCardState extends State<_PatientCard> {
     );
   }
 
-  /// Called whenever the intake stream emits; fires a caregiver notification
-  /// for any newly changed intake statuses.
-  /// [newIntakes] maps medId → status; [medNames] maps medId → medName.
   void _handleIntakeUpdate(
-      Map<String, String> newIntakes,
-      String patientUid,
-      String patientName, {
-      Map<String, String> medNames = const {},
+    Map<String, String> newIntakes,
+    String patientUid,
+    String patientName, {
+    Map<String, String> medNames = const {},
   }) {
     for (final entry in newIntakes.entries) {
-      final medId   = entry.key;
-      final status  = entry.value;
+      final medId  = entry.key;
+      final status = entry.value;
       if (_lastIntakes[medId] != status) {
-        // Only alert for taken / missed statuses
-        if (status == 'taken' || status == 'taken_late' || status == 'skipped') {
+        if (status == 'taken' ||
+            status == 'taken_late' ||
+            status == 'skipped') {
           _notifService.notifyCaregiverIntakeUpdate(
             patientUid:  patientUid,
             patientName: patientName,
@@ -310,10 +339,16 @@ class _PatientCardState extends State<_PatientCard> {
 
   @override
   Widget build(BuildContext context) {
-    final patientUid = widget.patient['uid'] as String;
-    final patientName = (widget.patient['name'] as String?)?.isNotEmpty == true
-        ? widget.patient['name'] as String
-        : 'Patient';
+    final acc     = context.watch<CaregiverAccessibilityProvider>();
+    final cs      = Theme.of(context).colorScheme;
+    final isDark  = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+
+    final patientUid  = widget.patient['uid'] as String;
+    final patientName =
+        (widget.patient['name'] as String?)?.isNotEmpty == true
+            ? widget.patient['name'] as String
+            : 'Patient';
     final email = widget.patient['email'] as String? ?? '';
 
     return GestureDetector(
@@ -330,22 +365,29 @@ class _PatientCardState extends State<_PatientCard> {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: cardColor,
           borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black
+                  .withValues(alpha: isDark ? 0.3 : 0.05),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Row(
           children: [
             // Avatar
             CircleAvatar(
               radius: 26,
-              backgroundColor:
-                  const Color(0xFF2BC8A7).withOpacity(0.15),
+              backgroundColor: cs.primary.withValues(alpha: 0.15),
               child: Text(
                 patientName.isNotEmpty
                     ? patientName[0].toUpperCase()
                     : 'P',
-                style: const TextStyle(
-                  color: Color(0xFF2BC8A7),
+                style: TextStyle(
+                  color: cs.primary,
                   fontWeight: FontWeight.bold,
                   fontSize: 20,
                 ),
@@ -360,17 +402,19 @@ class _PatientCardState extends State<_PatientCard> {
                 children: [
                   Text(
                     patientName,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
-                      color: Colors.black87,
+                      color: cs.onSurface,
                     ),
                   ),
                   const SizedBox(height: 3),
                   Text(
                     email,
-                    style: const TextStyle(
-                        fontSize: 12, color: Colors.black45),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color:
+                            cs.onSurface.withValues(alpha: 0.45)),
                   ),
                   const SizedBox(height: 6),
                   // Med count badge
@@ -383,14 +427,15 @@ class _PatientCardState extends State<_PatientCard> {
                         padding: const EdgeInsets.symmetric(
                             horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF4F7FF),
+                          color: cs.primary.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Text(
                           '$count medication${count == 1 ? '' : 's'}',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 11,
-                            color: Colors.black54,
+                            color:
+                                cs.onSurface.withValues(alpha: 0.55),
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -398,37 +443,40 @@ class _PatientCardState extends State<_PatientCard> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  // Intake Updates quick-link + caregiver notification listener
+                  // Silent intake notification listener
                   StreamBuilder<List<Map<String, dynamic>>>(
                     stream: FirebaseFirestore.instance
                         .collection('users')
                         .doc(patientUid)
                         .collection('intakes')
                         .where('date', isEqualTo: () {
-                          final n = DateTime.now();
-                          final y = n.year;
+                          final n  = DateTime.now();
                           final mo = n.month.toString().padLeft(2, '0');
                           final dy = n.day.toString().padLeft(2, '0');
-                          return '$y-$mo-$dy';
+                          return '${n.year}-$mo-$dy';
                         }())
                         .snapshots()
-                        .map((snap) => snap.docs
-                            .map((doc) => doc.data())
-                            .toList()),
+                        .map((s) =>
+                            s.docs.map((d) => d.data()).toList()),
                     builder: (context, intakeSnap) {
                       if (intakeSnap.hasData) {
-                        final docs = intakeSnap.data!;
+                        final docs      = intakeSnap.data!;
                         final statusMap = <String, String>{
                           for (final d in docs)
-                            if (d['medId'] != null && d['status'] != null)
-                              d['medId'] as String: d['status'] as String,
+                            if (d['medId'] != null &&
+                                d['status'] != null)
+                              d['medId'] as String:
+                                  d['status'] as String,
                         };
                         final nameMap = <String, String>{
                           for (final d in docs)
-                            if (d['medId'] != null && d['medName'] != null)
-                              d['medId'] as String: d['medName'] as String,
+                            if (d['medId'] != null &&
+                                d['medName'] != null)
+                              d['medId'] as String:
+                                  d['medName'] as String,
                         };
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                        WidgetsBinding.instance
+                            .addPostFrameCallback((_) {
                           if (mounted) {
                             _handleIntakeUpdate(
                               statusMap,
@@ -442,6 +490,7 @@ class _PatientCardState extends State<_PatientCard> {
                       return const SizedBox.shrink();
                     },
                   ),
+                  // Intake Updates quick-link
                   GestureDetector(
                     onTap: () => Navigator.push(
                       context,
@@ -456,20 +505,21 @@ class _PatientCardState extends State<_PatientCard> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF3B71FE).withOpacity(0.08),
+                        color: const Color(0xFF3B71FE)
+                            .withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(10),
                       ),
-                      child: const Row(
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.history_rounded,
+                          const Icon(Icons.history_rounded,
                               size: 13, color: Color(0xFF3B71FE)),
-                          SizedBox(width: 4),
+                          const SizedBox(width: 4),
                           Text(
                             'Intake Updates',
                             style: TextStyle(
                               fontSize: 11,
-                              color: Color(0xFF3B71FE),
+                              color: const Color(0xFF3B71FE),
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -484,8 +534,9 @@ class _PatientCardState extends State<_PatientCard> {
             // Actions
             Column(
               children: [
-                const Icon(Icons.chevron_right,
-                    color: Colors.black38, size: 22),
+                Icon(Icons.chevron_right,
+                    color: cs.onSurface.withValues(alpha: 0.3),
+                    size: 22),
                 const SizedBox(height: 8),
                 GestureDetector(
                   onTap: () => _confirmUnlink(context),
@@ -504,12 +555,14 @@ class _PatientCardState extends State<_PatientCard> {
 // ── Caregiver settings tab ────────────────────────────────────────────────────
 
 class _CaregiverSettingsTab extends StatelessWidget {
+  const _CaregiverSettingsTab();
+
   Future<void> _signOut(BuildContext context) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
         title: const Text('Sign Out'),
         content: const Text('Are you sure you want to sign out?'),
         actions: [
@@ -535,34 +588,101 @@ class _CaregiverSettingsTab extends StatelessWidget {
     );
   }
 
+  Widget _tile({
+    required BuildContext context,
+    required CaregiverAccessibilityProvider acc,
+    required ColorScheme cs,
+    required Color iconColor,
+    required IconData icon,
+    required String label,
+    Color? labelColor,
+    required VoidCallback onTap,
+  }) {
+    final isDark    = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final tileH = 56.0 * acc.buttonScaleFactor;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        constraints: BoxConstraints(minHeight: tileH),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        decoration: BoxDecoration(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black
+                  .withValues(alpha: isDark ? 0.25 : 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: iconColor, size: 22),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: labelColor ?? cs.onSurface,
+                ),
+              ),
+            ),
+            Icon(
+              Icons.chevron_right,
+              color: (labelColor ?? cs.onSurface).withValues(alpha: 0.4),
+              size: 20,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    final acc    = context.watch<CaregiverAccessibilityProvider>();
+    final cs     = Theme.of(context).colorScheme;
+    final user   = FirebaseAuth.instance.currentUser;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
 
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Settings',
-              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: cs.onSurface,
+              ),
             ),
             const SizedBox(height: 24),
 
-            // Profile card
+            // ── Profile card ───────────────────────────────────────────
             StreamBuilder<Map<String, dynamic>?>(
               stream: ProfileService().profileStream(),
               builder: (context, snap) {
                 final profileData = snap.data;
-                final displayName = (profileData?['name'] as String?)?.isNotEmpty == true
-                    ? profileData!['name'] as String
-                    : user?.displayName ?? 'Caregiver';
-                final profileImageUrl = profileData?['profileImageUrl'] as String?;
+                final displayName =
+                    (profileData?['name'] as String?)?.isNotEmpty == true
+                        ? profileData!['name'] as String
+                        : user?.displayName ?? 'Caregiver';
+                final profileImageUrl =
+                    profileData?['profileImageUrl'] as String?;
 
                 Widget avatarWidget;
-                if (profileImageUrl != null && profileImageUrl.startsWith('data:')) {
+                if (profileImageUrl != null &&
+                    profileImageUrl.startsWith('data:')) {
                   try {
                     final b64 = profileImageUrl.contains(',')
                         ? profileImageUrl.split(',').last
@@ -572,39 +692,33 @@ class _CaregiverSettingsTab extends StatelessWidget {
                       backgroundImage: MemoryImage(base64Decode(b64)),
                     );
                   } catch (_) {
-                    avatarWidget = CircleAvatar(
-                      radius: 28,
-                      backgroundColor: const Color(0xFF2BC8A7).withOpacity(0.15),
-                      child: const Icon(Icons.medical_services_outlined,
-                          color: Color(0xFF2BC8A7), size: 28),
-                    );
+                    avatarWidget = _defaultAvatar(displayName, cs);
                   }
                 } else {
-                  avatarWidget = CircleAvatar(
-                    radius: 28,
-                    backgroundColor: const Color(0xFF2BC8A7).withOpacity(0.15),
-                    child: Text(
-                      displayName.isNotEmpty ? displayName[0].toUpperCase() : 'C',
-                      style: const TextStyle(
-                          color: Color(0xFF2BC8A7),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 22),
-                    ),
-                  );
+                  avatarWidget = _defaultAvatar(displayName, cs);
                 }
 
                 return GestureDetector(
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const ProfileSettingsScreen(isCaregiverMode: true),
+                      builder: (_) => const ProfileSettingsScreen(
+                          isCaregiverMode: true),
                     ),
                   ),
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white,
+                      color: cardColor,
                       borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(
+                              alpha: isDark ? 0.25 : 0.04),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: Row(
                       children: [
@@ -612,17 +726,24 @@ class _CaregiverSettingsTab extends StatelessWidget {
                         const SizedBox(width: 14),
                         Expanded(
                           child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                            crossAxisAlignment:
+                                CrossAxisAlignment.start,
                             children: [
                               Text(
                                 displayName,
-                                style: const TextStyle(
-                                    fontSize: 16, fontWeight: FontWeight.bold),
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: cs.onSurface,
+                                ),
                               ),
                               Text(
                                 user?.email ?? '',
-                                style: const TextStyle(
-                                    fontSize: 13, color: Colors.black45),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: cs.onSurface
+                                      .withValues(alpha: 0.45),
+                                ),
                               ),
                             ],
                           ),
@@ -631,20 +752,23 @@ class _CaregiverSettingsTab extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF2BC8A7).withOpacity(0.1),
+                            color: cs.primary.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(20),
                           ),
-                          child: const Text(
+                          child: Text(
                             'Caregiver',
                             style: TextStyle(
-                                fontSize: 12,
-                                color: Color(0xFF2BC8A7),
-                                fontWeight: FontWeight.w700),
+                              fontSize: 12,
+                              color: cs.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 8),
-                        const Icon(Icons.edit_outlined,
-                            size: 18, color: Colors.black38),
+                        Icon(Icons.edit_outlined,
+                            size: 18,
+                            color: cs.onSurface
+                                .withValues(alpha: 0.35)),
                       ],
                     ),
                   ),
@@ -654,101 +778,84 @@ class _CaregiverSettingsTab extends StatelessWidget {
 
             const SizedBox(height: 16),
 
-            // Edit Profile
-            GestureDetector(
+            _tile(
+              context: context,
+              acc: acc,
+              cs: cs,
+              iconColor: cs.primary,
+              icon: Icons.person_outline,
+              label: 'Edit Profile',
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => const ProfileSettingsScreen(isCaregiverMode: true),
-                ),
-              ),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.person_outline, color: Color(0xFF2BC8A7), size: 22),
-                    SizedBox(width: 14),
-                    Expanded(
-                      child: Text(
-                        'Edit Profile',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: Colors.black38, size: 20),
-                  ],
+                  builder: (_) => const ProfileSettingsScreen(
+                      isCaregiverMode: true),
                 ),
               ),
             ),
 
             const SizedBox(height: 12),
 
-            // Notification Settings
-            GestureDetector(
+            _tile(
+              context: context,
+              acc: acc,
+              cs: cs,
+              iconColor: cs.primary,
+              icon: Icons.notifications_outlined,
+              label: 'Notification Settings',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const NotificationSettingsScreen(
+                      isCaregiverMode: true),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            _tile(
+              context: context,
+              acc: acc,
+              cs: cs,
+              iconColor: cs.primary,
+              icon: Icons.accessibility_new_rounded,
+              label: 'Accessibility',
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) =>
-                      const NotificationSettingsScreen(isCaregiverMode: true),
-                ),
-              ),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.notifications_outlined,
-                        color: Color(0xFF2BC8A7), size: 22),
-                    SizedBox(width: 14),
-                    Expanded(
-                      child: Text(
-                        'Notification Settings',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: Colors.black38, size: 20),
-                  ],
+                      const CaregiverAccessibilitySettingsScreen(),
                 ),
               ),
             ),
 
             const SizedBox(height: 12),
 
-            // Sign out
-            GestureDetector(
+            _tile(
+              context: context,
+              acc: acc,
+              cs: cs,
+              iconColor: Colors.red,
+              icon: Icons.logout,
+              label: 'Sign Out',
+              labelColor: Colors.red,
               onTap: () => _signOut(context),
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.logout, color: Colors.red, size: 22),
-                    SizedBox(width: 14),
-                    Expanded(
-                      child: Text(
-                        'Sign Out',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600, color: Colors.red),
-                      ),
-                    ),
-                    Icon(Icons.chevron_right, color: Colors.redAccent, size: 20),
-                  ],
-                ),
-              ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _defaultAvatar(String displayName, ColorScheme cs) {
+    return CircleAvatar(
+      radius: 28,
+      backgroundColor: cs.primary.withValues(alpha: 0.15),
+      child: Text(
+        displayName.isNotEmpty ? displayName[0].toUpperCase() : 'C',
+        style: TextStyle(
+            color: cs.primary, fontWeight: FontWeight.bold, fontSize: 22),
       ),
     );
   }

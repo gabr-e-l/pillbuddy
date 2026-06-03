@@ -10,10 +10,14 @@
 //   • Toggle intake-update notifications on / off
 //   • Explains that they get notified when a patient marks taken / missed
 //
-// No Firebase Cloud Functions or Blaze plan features are used.
-// All notifications are local (flutter_local_notifications).
+// UPDATED: Wraps content in the correct accessibility theme so that dark/HC
+// mode, font scale, and button scale from AccessibilityProvider (patient) or
+// CaregiverAccessibilityProvider (caregiver) are applied automatically.
 
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/accessibility_provider.dart';
+import '../providers/caregiver_accessibility_provider.dart';
 import '../services/notification_service.dart';
 
 class NotificationSettingsScreen extends StatefulWidget {
@@ -37,10 +41,6 @@ class _NotificationSettingsScreenState
   bool _enabled = true;
   bool _loading = true;
 
-  // Colour palette — matches each side's accent
-  Color get _accent =>
-      widget.isCaregiverMode ? const Color(0xFF2BC8A7) : const Color(0xFF1A6BFF);
-
   @override
   void initState() {
     super.initState();
@@ -51,11 +51,15 @@ class _NotificationSettingsScreenState
     final enabled = widget.isCaregiverMode
         ? await _svc.isCaregiverEnabled()
         : await _svc.isPatientEnabled();
-    if (mounted) setState(() { _enabled = enabled; _loading = false; });
+    if (mounted) {
+      setState(() {
+        _enabled = enabled;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _toggle(bool value) async {
-    // Ask for permission first when enabling
     if (value) {
       final granted = await _svc.requestPermission();
       if (!granted && mounted) {
@@ -76,7 +80,8 @@ class _NotificationSettingsScreenState
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Permission Required'),
         content: const Text(
           'Notification permission was denied. '
@@ -96,21 +101,61 @@ class _NotificationSettingsScreenState
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isCaregiver = widget.isCaregiverMode;
+    if (widget.isCaregiverMode) {
+      return _buildWithCaregiverTheme();
+    } else {
+      return _buildWithPatientTheme();
+    }
+  }
+
+  Widget _buildWithPatientTheme() {
+    final acc = context.watch<AccessibilityProvider>();
+    final isDark = acc.themeMode == AppThemeMode.dark;
+    final theme = isDark ? acc.buildDarkTheme() : acc.buildLightTheme();
+    final mq = MediaQuery.of(context)
+        .copyWith(textScaler: TextScaler.linear(acc.fontScaleFactor));
+
+    return Theme(
+      data: theme,
+      child: MediaQuery(
+        data: mq,
+        child: Builder(builder: (ctx) => _buildContent(ctx)),
+      ),
+    );
+  }
+
+  Widget _buildWithCaregiverTheme() {
+    final acc = context.watch<CaregiverAccessibilityProvider>();
+    final mq = MediaQuery.of(context)
+        .copyWith(textScaler: TextScaler.linear(acc.fontScaleFactor));
+
+    return Theme(
+      data: acc.theme,
+      child: MediaQuery(
+        data: mq,
+        child: Builder(builder: (ctx) => _buildContent(ctx)),
+      ),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor =
+        isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final onSurface = cs.onSurface;
+
+    // Accent: caregiver teal vs patient primary
+    final accent = widget.isCaregiverMode ? const Color(0xFF2BC8A7) : cs.primary;
 
     return Scaffold(
-      backgroundColor: isCaregiver
-          ? const Color(0xFFF4F7FF)
-          : theme.scaffoldBackgroundColor,
+      backgroundColor: bgColor,
       appBar: AppBar(
-        backgroundColor:
-            isCaregiver ? const Color(0xFFF4F7FF) : theme.scaffoldBackgroundColor,
+        backgroundColor: bgColor,
         elevation: 0,
         leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios,
-              size: 20,
-              color: isCaregiver ? Colors.black87 : theme.colorScheme.onSurface),
+          icon: Icon(Icons.arrow_back_ios, size: 20, color: onSurface),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
@@ -118,33 +163,34 @@ class _NotificationSettingsScreenState
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
-            color: isCaregiver ? Colors.black87 : theme.colorScheme.onSurface,
+            color: onSurface,
           ),
         ),
         centerTitle: true,
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? Center(child: CircularProgressIndicator(color: accent))
           : ListView(
               padding: const EdgeInsets.all(20),
               children: [
-                // ── Master toggle ──────────────────────────────────────────
+                // ── Master toggle ────────────────────────────────────────
                 _SectionCard(
-                  isCaregiver: isCaregiver,
+                  cardColor: cardColor,
+                  isDark: isDark,
                   child: Row(
                     children: [
                       Container(
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
-                          color: _accent.withOpacity(0.12),
+                          color: accent.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Icon(
-                          isCaregiver
+                          widget.isCaregiverMode
                               ? Icons.notifications_active_outlined
                               : Icons.medication_outlined,
-                          color: _accent,
+                          color: accent,
                           size: 24,
                         ),
                       ),
@@ -154,27 +200,23 @@ class _NotificationSettingsScreenState
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              isCaregiver
+                              widget.isCaregiverMode
                                   ? 'Patient Intake Alerts'
                                   : 'Medication Reminders',
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.bold,
-                                color: isCaregiver
-                                    ? Colors.black87
-                                    : theme.colorScheme.onSurface,
+                                color: onSurface,
                               ),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              isCaregiver
+                              widget.isCaregiverMode
                                   ? 'Get notified when a patient takes or misses a dose'
                                   : 'Receive reminders for each scheduled dose',
                               style: TextStyle(
                                 fontSize: 12,
-                                color: isCaregiver
-                                    ? Colors.black45
-                                    : theme.colorScheme.onSurface.withOpacity(0.5),
+                                color: onSurface.withValues(alpha: 0.5),
                               ),
                             ),
                           ],
@@ -183,7 +225,7 @@ class _NotificationSettingsScreenState
                       Switch(
                         value: _enabled,
                         onChanged: _toggle,
-                        activeColor: _accent,
+                        activeColor: accent,
                       ),
                     ],
                   ),
@@ -191,45 +233,47 @@ class _NotificationSettingsScreenState
 
                 const SizedBox(height: 20),
 
-                // ── How it works ──────────────────────────────────────────
+                // ── How it works ─────────────────────────────────────────
                 Text(
                   'HOW IT WORKS',
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.2,
-                    color: isCaregiver ? Colors.black38 : theme.colorScheme.onSurface.withOpacity(0.4),
+                    color: onSurface.withValues(alpha: 0.4),
                   ),
                 ),
                 const SizedBox(height: 10),
 
                 _SectionCard(
-                  isCaregiver: isCaregiver,
+                  cardColor: cardColor,
+                  isDark: isDark,
                   child: Column(
-                    children: isCaregiver
-                        ? _caregiverSteps(theme)
-                        : _patientSteps(theme),
+                    children: widget.isCaregiverMode
+                        ? _caregiverSteps(onSurface)
+                        : _patientSteps(onSurface),
                   ),
                 ),
 
                 const SizedBox(height: 20),
 
-                // ── Info banner ───────────────────────────────────────────
+                // ── Info banner ──────────────────────────────────────────
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
-                    color: _accent.withOpacity(0.08),
+                    color: accent.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: _accent.withOpacity(0.2)),
+                    border: Border.all(
+                        color: accent.withValues(alpha: 0.2)),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Icon(Icons.info_outline, color: _accent, size: 18),
+                      Icon(Icons.info_outline, color: accent, size: 18),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          isCaregiver
+                          widget.isCaregiverMode
                               ? 'Notifications appear when you have the app installed '
                                 'and are signed in. No internet connection is required '
                                 'to receive them — they are delivered locally on your device.'
@@ -238,7 +282,7 @@ class _NotificationSettingsScreenState
                                 'permission is granted for reminders to work.',
                           style: TextStyle(
                             fontSize: 12,
-                            color: _accent,
+                            color: accent,
                             height: 1.5,
                           ),
                         ),
@@ -253,58 +297,64 @@ class _NotificationSettingsScreenState
 
   // ── Step lists ─────────────────────────────────────────────────────────────
 
-  List<Widget> _patientSteps(ThemeData theme) {
+  List<Widget> _patientSteps(Color onSurface) {
     final steps = [
       _StepData(
         icon: Icons.notifications_outlined,
         color: const Color(0xFF1A6BFF),
         title: 'First Reminder',
-        subtitle: 'Sent at the scheduled intake time with medicine name, dosage, and time.',
+        subtitle:
+            'Sent at the scheduled intake time with medicine name, dosage, and time.',
       ),
       _StepData(
         icon: Icons.snooze_outlined,
         color: const Color(0xFFFFA726),
         title: 'Snooze Alert (10 min later)',
-        subtitle: 'A follow-up reminder if the dose hasn\'t been marked yet.',
+        subtitle:
+            "A follow-up reminder if the dose hasn't been marked yet.",
       ),
       _StepData(
         icon: Icons.warning_amber_rounded,
         color: const Color(0xFFEF5350),
         title: 'Final Alert (20 min later)',
-        subtitle: 'Last warning before the dose is automatically recorded as a Missed Dose with a timestamp.',
+        subtitle:
+            'Last warning before the dose is automatically recorded as a Missed Dose with a timestamp.',
         isLast: true,
       ),
     ];
-    return steps.map((s) => _StepRow(data: s, theme: theme)).toList();
+    return steps.map((s) => _StepRow(data: s, onSurface: onSurface)).toList();
   }
 
-  List<Widget> _caregiverSteps(ThemeData theme) {
+  List<Widget> _caregiverSteps(Color onSurface) {
     final steps = [
       _StepData(
         icon: Icons.check_circle_outline,
         color: const Color(0xFF2BC8A7),
         title: 'Dose Taken',
-        subtitle: 'You receive a notification when a patient marks a dose as Taken or Taken Late.',
+        subtitle:
+            'You receive a notification when a patient marks a dose as Taken or Taken Late.',
       ),
       _StepData(
         icon: Icons.cancel_outlined,
         color: const Color(0xFFEF5350),
         title: 'Dose Missed',
-        subtitle: 'You are alerted when a dose is recorded as Skipped or auto-marked as Missed.',
+        subtitle:
+            'You are alerted when a dose is recorded as Skipped or auto-marked as Missed.',
       ),
       _StepData(
         icon: Icons.history_rounded,
         color: const Color(0xFF3B71FE),
         title: 'Aligned with Intake Updates',
-        subtitle: 'Every alert matches the Intake Updates timeline — both include a timestamp.',
+        subtitle:
+            'Every alert matches the Intake Updates timeline — both include a timestamp.',
         isLast: true,
       ),
     ];
-    return steps.map((s) => _StepRow(data: s, theme: theme, isCaregiver: true)).toList();
+    return steps.map((s) => _StepRow(data: s, onSurface: onSurface)).toList();
   }
 }
 
-// ── Helper widgets ─────────────────────────────────────────────────────────────
+// ── Helper widgets ──────────────────────────────────────────────────────────
 
 class _StepData {
   final IconData icon;
@@ -324,22 +374,12 @@ class _StepData {
 
 class _StepRow extends StatelessWidget {
   final _StepData data;
-  final ThemeData theme;
-  final bool isCaregiver;
+  final Color onSurface;
 
-  const _StepRow({
-    required this.data,
-    required this.theme,
-    this.isCaregiver = false,
-  });
+  const _StepRow({required this.data, required this.onSurface});
 
   @override
   Widget build(BuildContext context) {
-    final titleColor = isCaregiver ? Colors.black87 : theme.colorScheme.onSurface;
-    final subtitleColor = isCaregiver
-        ? Colors.black45
-        : theme.colorScheme.onSurface.withOpacity(0.5);
-
     return Padding(
       padding: EdgeInsets.only(bottom: data.isLast ? 0 : 16),
       child: Row(
@@ -351,7 +391,7 @@ class _StepRow extends StatelessWidget {
                 width: 36,
                 height: 36,
                 decoration: BoxDecoration(
-                  color: data.color.withOpacity(0.12),
+                  color: data.color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Icon(data.icon, color: data.color, size: 20),
@@ -360,7 +400,7 @@ class _StepRow extends StatelessWidget {
                 Container(
                   width: 2,
                   height: 28,
-                  color: data.color.withOpacity(0.2),
+                  color: data.color.withValues(alpha: 0.2),
                   margin: const EdgeInsets.symmetric(vertical: 4),
                 ),
             ],
@@ -377,13 +417,16 @@ class _StepRow extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: titleColor,
+                      color: onSurface,
                     ),
                   ),
                   const SizedBox(height: 3),
                   Text(
                     data.subtitle,
-                    style: TextStyle(fontSize: 12, color: subtitleColor, height: 1.4),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: onSurface.withValues(alpha: 0.5),
+                        height: 1.4),
                   ),
                 ],
               ),
@@ -397,22 +440,26 @@ class _StepRow extends StatelessWidget {
 
 class _SectionCard extends StatelessWidget {
   final Widget child;
-  final bool isCaregiver;
+  final Color cardColor;
+  final bool isDark;
 
-  const _SectionCard({required this.child, required this.isCaregiver});
+  const _SectionCard({
+    required this.child,
+    required this.cardColor,
+    required this.isDark,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isCaregiver ? Colors.white : theme.colorScheme.surface,
+        color: cardColor,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
             blurRadius: 8,
             offset: const Offset(0, 3),
           ),

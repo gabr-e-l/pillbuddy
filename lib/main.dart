@@ -1,15 +1,15 @@
 // lib/main.dart
 //
-// Changes from previous version:
-//   - Wraps the entire app with ChangeNotifierProvider<AccessibilityProvider>
-//   - Loads persisted accessibility prefs before showing the first frame
-//   - Applies dynamic theme mode, font scale, and theme data from the provider
+// UPDATED: Registers CaregiverAccessibilityProvider alongside the existing
+// AccessibilityProvider so both patient and caregiver sides have independent
+// accessibility settings loaded before the first frame.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'providers/accessibility_provider.dart';
+import 'providers/caregiver_accessibility_provider.dart';
 import 'screens/splash_screen.dart';
 import 'services/notification_service.dart';
 
@@ -19,17 +19,27 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // Initialise local notifications (registers channels, loads timezone data)
+  // Initialise local notifications
   await NotificationService().init();
   await NotificationService().requestPermission();
 
-  // Load saved accessibility prefs before the first frame
+  // Load saved accessibility prefs for BOTH roles before the first frame
   final accessibilityProvider = AccessibilityProvider();
   await accessibilityProvider.load();
 
+  final caregiverAccessibilityProvider = CaregiverAccessibilityProvider();
+  await caregiverAccessibilityProvider.load();
+
   runApp(
-    ChangeNotifierProvider<AccessibilityProvider>.value(
-      value: accessibilityProvider,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider<AccessibilityProvider>.value(
+          value: accessibilityProvider,
+        ),
+        ChangeNotifierProvider<CaregiverAccessibilityProvider>.value(
+          value: caregiverAccessibilityProvider,
+        ),
+      ],
       child: const PillBuddyApp(),
     ),
   );
@@ -40,10 +50,13 @@ class PillBuddyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Patient-side accessibility drives the global MaterialApp theme so the
+    // patient screens continue to work exactly as before.  The caregiver side
+    // reads CaregiverAccessibilityProvider directly inside CaregiverHome and
+    // its sub-screens and wraps itself in its own theming.
     final acc = context.watch<AccessibilityProvider>();
 
     return MediaQuery(
-      // Override system text scale with our own font scale factor
       data: MediaQuery.of(context).copyWith(
         textScaler: TextScaler.linear(acc.fontScaleFactor),
       ),
@@ -51,12 +64,11 @@ class PillBuddyApp extends StatelessWidget {
         title: 'PillBuddy',
         debugShowCheckedModeBanner: false,
 
-        // Dynamic theming driven by AccessibilityProvider
+        // Patient-side theming
         themeMode: acc.flutterThemeMode,
         theme: acc.buildLightTheme(),
         darkTheme: acc.buildDarkTheme(),
 
-        // Centers the mobile-width content on wide web screens
         builder: (context, child) {
           return Center(
             child: ConstrainedBox(

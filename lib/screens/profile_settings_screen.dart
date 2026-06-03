@@ -2,11 +2,17 @@
 //
 // Editable profile screen for both patient and caregiver.
 // Supports: name, date of birth, gender, age display, and profile picture.
+//
+// UPDATED: Respects AccessibilityProvider (patient) or
+// CaregiverAccessibilityProvider (caregiver) — dark/HC colours, font scale,
+// and button scale are all applied automatically.
 
 import 'dart:convert';
-//import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+import '../providers/accessibility_provider.dart';
+import '../providers/caregiver_accessibility_provider.dart';
 import '../services/profile_service.dart';
 
 class ProfileSettingsScreen extends StatefulWidget {
@@ -43,18 +49,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   String? _profileImageBase64;
   String? _existingProfileImageUrl;
 
-  static const List<String> _genderOptions = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
+  static const List<String> _genderOptions = [
+    'Male', 'Female', 'Non-binary', 'Prefer not to say'
+  ];
 
   static const List<Color> _avatarColors = [
-    Color(0xFF3B71FE),
-    Color(0xFF6B5BFF),
-    Color(0xFF2BC8A7),
-    Color(0xFFFFA726),
-    Color(0xFFEF5350),
-    Color(0xFF8E24AA),
-    Color(0xFF42A5F5),
-    Color(0xFF26A69A),
-    Color(0xFFFFCA28),
+    Color(0xFF3B71FE), Color(0xFF6B5BFF), Color(0xFF2BC8A7),
+    Color(0xFFFFA726), Color(0xFFEF5350), Color(0xFF8E24AA),
+    Color(0xFF42A5F5), Color(0xFF26A69A), Color(0xFFFFCA28),
   ];
 
   static const List<String> _avatarInitials = [
@@ -68,6 +70,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
   void initState() {
     super.initState();
     _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadProfile() async {
@@ -123,7 +131,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile saved!'), backgroundColor: Colors.green),
+        const SnackBar(
+            content: Text('Profile saved!'), backgroundColor: Colors.green),
       );
     } catch (e) {
       if (!mounted) return;
@@ -137,9 +146,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
   }
 
-  Future<void> _pickProfilePicture() async {
-    showModalBottomSheet(
+  Future<void> _pickProfilePicture(
+      {required Color accent, required bool isDark}) {
+    return showModalBottomSheet(
       context: context,
+      backgroundColor: isDark ? const Color(0xFF1E1E2E) : Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => SafeArea(
@@ -147,28 +158,37 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 12),
-            const Text('Profile Picture',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text('Profile Picture',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : Colors.black87)),
             const SizedBox(height: 8),
             ListTile(
-              leading: Icon(Icons.camera_alt, color: _themeColor),
-              title: const Text('Take a Photo'),
+              leading: Icon(Icons.camera_alt, color: accent),
+              title: Text('Take a Photo',
+                  style:
+                      TextStyle(color: isDark ? Colors.white : Colors.black87)),
               onTap: () {
                 Navigator.pop(ctx);
                 _capturePhoto(ImageSource.camera);
               },
             ),
             ListTile(
-              leading: Icon(Icons.photo_library, color: _themeColor),
-              title: const Text('Choose from Gallery'),
+              leading: Icon(Icons.photo_library, color: accent),
+              title: Text('Choose from Gallery',
+                  style:
+                      TextStyle(color: isDark ? Colors.white : Colors.black87)),
               onTap: () {
                 Navigator.pop(ctx);
                 _capturePhoto(ImageSource.gallery);
               },
             ),
-            if (_profileImageBase64 != null || _existingProfileImageUrl != null)
+            if (_profileImageBase64 != null ||
+                _existingProfileImageUrl != null)
               ListTile(
-                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                leading:
+                    const Icon(Icons.delete_outline, color: Colors.red),
                 title: const Text('Remove Photo',
                     style: TextStyle(color: Colors.red)),
                 onTap: () {
@@ -190,7 +210,10 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     try {
       final picker = ImagePicker();
       final file = await picker.pickImage(
-          source: source, maxWidth: 400, maxHeight: 400, imageQuality: 75);
+          source: source,
+          maxWidth: 400,
+          maxHeight: 400,
+          imageQuality: 75);
       if (file == null) return;
       final bytes = await file.readAsBytes();
       setState(() {
@@ -225,7 +248,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     return age;
   }
 
-  Future<void> _pickDateOfBirth() async {
+  Future<void> _pickDateOfBirth(Color accent) async {
     final selected = await showDatePicker(
       context: context,
       initialDate: _dateOfBirth ?? DateTime(1995, 1, 1),
@@ -233,7 +256,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
       lastDate: DateTime.now(),
       builder: (context, child) => Theme(
         data: Theme.of(context).copyWith(
-          colorScheme: ColorScheme.light(primary: _themeColor),
+          colorScheme: ColorScheme.light(primary: accent),
         ),
         child: child!,
       ),
@@ -241,9 +264,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     if (selected != null) setState(() => _dateOfBirth = selected);
   }
 
-  void _showGenderPicker() {
+  void _showGenderPicker(
+      {required Color accent, required bool isDark, required Color onSurface}) {
     showModalBottomSheet(
       context: context,
+      backgroundColor: isDark ? const Color(0xFF1E1E2E) : Colors.white,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(25))),
       builder: (context) {
@@ -253,8 +278,11 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Choose Gender',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              Text('Choose Gender',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: onSurface)),
               const SizedBox(height: 18),
               ..._genderOptions.map((option) {
                 final selected = option == _gender;
@@ -262,9 +290,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                   title: Text(option,
                       style: TextStyle(
                           fontSize: 16,
-                          color: selected ? _themeColor : Colors.black87)),
+                          color: selected ? accent : onSurface)),
                   trailing: selected
-                      ? Icon(Icons.check, color: _themeColor)
+                      ? Icon(Icons.check, color: accent)
                       : null,
                   onTap: () {
                     setState(() => _gender = option);
@@ -280,11 +308,14 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
   }
 
-  Widget _buildAvatar() {
+  Widget _buildAvatar(Color accent) {
     final imageUrl = _profileImageBase64 ?? _existingProfileImageUrl;
-    if (imageUrl != null && imageUrl.isNotEmpty && imageUrl.startsWith('data:')) {
+    if (imageUrl != null &&
+        imageUrl.isNotEmpty &&
+        imageUrl.startsWith('data:')) {
       try {
-        final b64 = imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
+        final b64 =
+            imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
         return CircleAvatar(
           radius: 50,
           backgroundImage: MemoryImage(base64Decode(b64)),
@@ -293,7 +324,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     }
     return CircleAvatar(
       radius: 50,
-      backgroundColor: _avatarColors[_selectedAvatarIndex % _avatarColors.length],
+      backgroundColor:
+          _avatarColors[_selectedAvatarIndex % _avatarColors.length],
       child: Text(
         _nameController.text.isNotEmpty
             ? _nameController.text[0].toUpperCase()
@@ -308,6 +340,9 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     required String label,
     required String value,
     required VoidCallback onTap,
+    required Color labelColor,
+    required Color fieldBg,
+    required Color onSurface,
     String? subtitle,
   }) {
     return Column(
@@ -316,17 +351,19 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
         Text(label,
             style: TextStyle(
                 fontSize: 14,
-                color: Colors.grey[700],
+                color: labelColor,
                 fontWeight: FontWeight.w600)),
         const SizedBox(height: 8),
         GestureDetector(
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: fieldBg,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.grey.withOpacity(0.2)),
+              border:
+                  Border.all(color: onSurface.withValues(alpha: 0.12)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -339,18 +376,23 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         value,
                         style: TextStyle(
                             fontSize: 15,
-                            color: value.startsWith('Enter') || value == 'Not set'
-                                ? Colors.grey
-                                : Colors.black87),
+                            color: value.startsWith('Enter') ||
+                                    value == 'Not set'
+                                ? onSurface.withValues(alpha: 0.4)
+                                : onSurface),
                       ),
                       if (subtitle != null)
                         Text(subtitle,
-                            style: const TextStyle(
-                                fontSize: 12, color: Colors.black45)),
+                            style: TextStyle(
+                                fontSize: 12,
+                                color:
+                                    onSurface.withValues(alpha: 0.45))),
                     ],
                   ),
                 ),
-                const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey),
+                Icon(Icons.arrow_forward_ios,
+                    size: 16,
+                    color: onSurface.withValues(alpha: 0.4)),
               ],
             ),
           ),
@@ -359,38 +401,93 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
     );
   }
 
+  // ── Build ──────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
+    if (widget.isCaregiverMode) {
+      return _buildWithCaregiverTheme();
+    } else {
+      return _buildWithPatientTheme();
+    }
+  }
+
+  Widget _buildWithPatientTheme() {
+    final acc = context.watch<AccessibilityProvider>();
+    final isDark = acc.themeMode == AppThemeMode.dark;
+    final theme = isDark ? acc.buildDarkTheme() : acc.buildLightTheme();
+    final mq = MediaQuery.of(context)
+        .copyWith(textScaler: TextScaler.linear(acc.fontScaleFactor));
+
+    return Theme(
+      data: theme,
+      child: MediaQuery(
+        data: mq,
+        child: Builder(builder: (ctx) => _buildScaffold(ctx, acc.buttonScaleFactor)),
+      ),
+    );
+  }
+
+  Widget _buildWithCaregiverTheme() {
+    final acc = context.watch<CaregiverAccessibilityProvider>();
+    final theme = acc.theme;
+    final mq = MediaQuery.of(context)
+        .copyWith(textScaler: TextScaler.linear(acc.fontScaleFactor));
+
+    return Theme(
+      data: theme,
+      child: MediaQuery(
+        data: mq,
+        child: Builder(builder: (ctx) => _buildScaffold(ctx, acc.buttonScaleFactor)),
+      ),
+    );
+  }
+
+  Widget _buildScaffold(BuildContext context, double buttonScaleFactor) {
+    final cs = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor =
+        isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final onSurface = cs.onSurface;
+    final accent = widget.isCaregiverMode ? const Color(0xFF2BC8A7) : cs.primary;
+    final labelColor = onSurface.withValues(alpha: 0.6);
+    final btnH = 56.0 * buttonScaleFactor;
+
     if (_isLoading) {
       return Scaffold(
-        backgroundColor: const Color(0xFFF4F7FF),
-        body: Center(
-            child: CircularProgressIndicator(color: _themeColor)),
+        backgroundColor: bgColor,
+        body: Center(child: CircularProgressIndicator(color: accent)),
       );
     }
 
     final age = _computeAge();
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FF),
+      backgroundColor: bgColor,
       body: SafeArea(
         child: Column(
           children: [
-            // Header
+            // ── Header ─────────────────────────────────────────────────
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
               child: Row(
                 children: [
                   GestureDetector(
                     onTap: () => Navigator.pop(context),
-                    child: const Icon(Icons.arrow_back_ios_new,
-                        color: Colors.black87, size: 20),
+                    child: Icon(Icons.arrow_back_ios_new,
+                        color: onSurface, size: 20),
                   ),
-                  const Expanded(
+                  Expanded(
                     child: Center(
-                      child: Text('Edit Profile',
-                          style: TextStyle(
-                              fontSize: 20, fontWeight: FontWeight.bold)),
+                      child: Text(
+                        'Edit Profile',
+                        style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: onSurface),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 24),
@@ -398,7 +495,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
               ),
             ),
 
-            // Form
+            // ── Form ───────────────────────────────────────────────────
             Expanded(
               child: SingleChildScrollView(
                 child: Padding(
@@ -411,14 +508,15 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       Stack(
                         alignment: Alignment.bottomRight,
                         children: [
-                          _buildAvatar(),
+                          _buildAvatar(accent),
                           GestureDetector(
-                            onTap: _pickProfilePicture,
+                            onTap: () => _pickProfilePicture(
+                                accent: accent, isDark: isDark),
                             child: Container(
                               width: 36,
                               height: 36,
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: cardColor,
                                 borderRadius: BorderRadius.circular(12),
                                 boxShadow: const [
                                   BoxShadow(
@@ -428,7 +526,7 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                                 ],
                               ),
                               child: Icon(Icons.camera_alt,
-                                  size: 18, color: _themeColor),
+                                  size: 18, color: accent),
                             ),
                           ),
                         ],
@@ -437,7 +535,8 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       const SizedBox(height: 6),
                       Text('Tap to change photo',
                           style: TextStyle(
-                              fontSize: 12, color: Colors.grey[500])),
+                              fontSize: 12,
+                              color: onSurface.withValues(alpha: 0.4))),
 
                       const SizedBox(height: 24),
 
@@ -447,24 +546,27 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         child: Text('Name',
                             style: TextStyle(
                                 fontSize: 14,
-                                color: Colors.grey[700],
+                                color: labelColor,
                                 fontWeight: FontWeight.w600)),
                       ),
                       const SizedBox(height: 8),
                       Container(
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: cardColor,
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(
-                              color: Colors.grey.withOpacity(0.2)),
+                              color: onSurface.withValues(alpha: 0.12)),
                         ),
                         child: TextField(
                           controller: _nameController,
                           onChanged: (_) => setState(() {}),
-                          decoration: const InputDecoration(
+                          style: TextStyle(color: onSurface),
+                          decoration: InputDecoration(
                             hintText: 'Enter your name',
+                            hintStyle: TextStyle(
+                                color: onSurface.withValues(alpha: 0.35)),
                             border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
+                            contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 18, vertical: 16),
                           ),
                         ),
@@ -477,8 +579,12 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                         value: _dateOfBirth != null
                             ? _formatDate(_dateOfBirth!)
                             : 'Enter your date of birth',
-                        subtitle: age != null ? 'Age: $age years old' : null,
-                        onTap: _pickDateOfBirth,
+                        subtitle:
+                            age != null ? 'Age: $age years old' : null,
+                        onTap: () => _pickDateOfBirth(accent),
+                        labelColor: labelColor,
+                        fieldBg: cardColor,
+                        onSurface: onSurface,
                       ),
 
                       const SizedBox(height: 16),
@@ -486,33 +592,46 @@ class _ProfileSettingsScreenState extends State<ProfileSettingsScreen> {
                       _buildInfoField(
                         label: 'Gender',
                         value: _gender,
-                        onTap: _showGenderPicker,
+                        onTap: () => _showGenderPicker(
+                            accent: accent,
+                            isDark: isDark,
+                            onSurface: onSurface),
+                        labelColor: labelColor,
+                        fieldBg: cardColor,
+                        onSurface: onSurface,
                       ),
 
                       const SizedBox(height: 30),
 
                       // Save button
-                      ElevatedButton(
-                        onPressed: _isSaving ? null : _saveProfile,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _themeColor,
-                          disabledBackgroundColor: _themeColor.withOpacity(0.6),
-                          minimumSize: const Size.fromHeight(56),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                      SizedBox(
+                        width: double.infinity,
+                        height: btnH,
+                        child: ElevatedButton(
+                          onPressed: _isSaving ? null : _saveProfile,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: accent,
+                            disabledBackgroundColor:
+                                accent.withValues(alpha: 0.6),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16)),
+                            elevation: 0,
+                          ),
+                          child: _isSaving
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2.5,
+                                      color: Colors.white))
+                              : const Text(
+                                  'Save Changes',
+                                  style: TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.white),
+                                ),
                         ),
-                        child: _isSaving
-                            ? const SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2.5,
-                                    color: Colors.white))
-                            : const Text('Save Changes',
-                                style: TextStyle(
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white)),
                       ),
 
                       const SizedBox(height: 30),

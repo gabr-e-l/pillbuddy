@@ -1,16 +1,18 @@
 // lib/screens/caregiver_patient_meds_screen.dart
 //
-// Displays the patient's medication list. Caregivers can:
-//   - Add a new medication
-//   - Edit an existing medication (tap card or edit icon)
-//   - Delete an existing medication
+// UPDATED: Uses CaregiverThemeWrapper — no manual font multipliers needed
+// inside (MediaQuery textScaler handles it). Dark/HC colours come from
+// the theme's ColorScheme.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../models/medication_model.dart';
+import '../providers/caregiver_accessibility_provider.dart';
 import '../services/caregiver_service.dart';
 import 'caregiver_add_med_screen.dart';
 import 'caregiver_intake_history_screen.dart';
+import 'caregiver_theme_wrapper.dart';
 
 class CaregiverPatientMedsScreen extends StatelessWidget {
   final String patientUid;
@@ -26,152 +28,186 @@ class CaregiverPatientMedsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final service = CaregiverService();
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FF),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFFF4F7FF),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios, size: 20, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          children: [
-            Text(
-              patientName,
-              style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.bold, color: Colors.black87),
-            ),
-            const Text(
-              'Medications',
-              style: TextStyle(fontSize: 12, color: Colors.black45),
-            ),
-          ],
-        ),
-        centerTitle: true,
-        actions: [
-          // Intake Updates button
-          Padding(
-            padding: const EdgeInsets.only(right: 4),
-            child: IconButton(
-              tooltip: 'Intake Updates',
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CaregiverIntakeHistoryScreen(
-                    patientUid: patientUid,
-                    patientName: patientName,
-                  ),
-                ),
-              ),
-              icon: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF3B71FE).withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.history_rounded,
-                    color: Color(0xFF3B71FE), size: 20),
-              ),
-            ),
-          ),
-          // Add medication button
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: IconButton(
-              onPressed: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CaregiverAddMedScreen(
-                    patientUid: patientUid,
-                    patientName: patientName,
-                  ),
-                ),
-              ),
-              icon: Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2BC8A7),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.add, color: Colors.white, size: 20),
-              ),
-            ),
-          ),
-        ],
-      ),
-      body: StreamBuilder<List<MedicationModel>>(
-        stream: service.patientMedicationsStream(patientUid),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return Center(
-              child: Text('Error: ${snap.error}',
-                  style: const TextStyle(color: Colors.redAccent)),
-            );
-          }
+    return CaregiverThemeWrapper(
+      builder: (ctx, acc) {
+        final cs      = Theme.of(ctx).colorScheme;
+        final isDark  = Theme.of(ctx).brightness == Brightness.dark;
+        final bgColor = isDark
+            ? const Color(0xFF121212)
+            : const Color(0xFFF4F7FF);
 
-          final meds = snap.data ?? [];
-
-          if (meds.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.medication_outlined, size: 72, color: Colors.grey[300]),
-                  const SizedBox(height: 16),
-                  const Text('No medications yet',
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black54)),
-                  const SizedBox(height: 8),
-                  Text('Add a medication for $patientName.',
-                      style: const TextStyle(fontSize: 13, color: Colors.black38)),
-                  const SizedBox(height: 24),
-                  ElevatedButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => CaregiverAddMedScreen(
-                          patientUid: patientUid,
-                          patientName: patientName,
-                        ),
+        return Scaffold(
+          backgroundColor: bgColor,
+          appBar: AppBar(
+            backgroundColor: bgColor,
+            elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back_ios,
+                  size: 20, color: cs.onSurface),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Column(
+              children: [
+                Text(
+                  patientName,
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: cs.onSurface),
+                ),
+                Text(
+                  'Medications',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSurface.withValues(alpha: 0.45)),
+                ),
+              ],
+            ),
+            centerTitle: true,
+            actions: [
+              // Intake updates
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: IconButton(
+                  tooltip: 'Intake Updates',
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CaregiverIntakeHistoryScreen(
+                        patientUid: patientUid,
+                        patientName: patientName,
                       ),
                     ),
-                    icon: const Icon(Icons.add, color: Colors.white, size: 18),
-                    label: const Text('Add Medication',
-                        style: TextStyle(
-                            color: Colors.white, fontWeight: FontWeight.w600)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2BC8A7),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20)),
-                      elevation: 0,
+                  ),
+                  icon: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3B71FE)
+                          .withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.history_rounded,
+                        color: Color(0xFF3B71FE), size: 20),
+                  ),
+                ),
+              ),
+              // Add med
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: IconButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CaregiverAddMedScreen(
+                        patientUid: patientUid,
+                        patientName: patientName,
+                      ),
                     ),
                   ),
-                ],
+                  icon: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: cs.primary,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.add,
+                        color: Colors.white, size: 20),
+                  ),
+                ),
               ),
-            );
-          }
+            ],
+          ),
+          body: StreamBuilder<List<MedicationModel>>(
+            stream: service.patientMedicationsStream(patientUid),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return Center(
+                    child:
+                        CircularProgressIndicator(color: cs.primary));
+              }
+              if (snap.hasError) {
+                return Center(
+                  child: Text('Error: ${snap.error}',
+                      style:
+                          const TextStyle(color: Colors.redAccent)),
+                );
+              }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: meds.length,
-            itemBuilder: (context, i) {
-              final med = meds[i];
-              return _MedCard(
-                med: med,
-                patientUid: patientUid,
-                patientName: patientName,
-                service: service,
+              final meds = snap.data ?? [];
+
+              if (meds.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.medication_outlined,
+                          size: 72,
+                          color:
+                              cs.onSurface.withValues(alpha: 0.2)),
+                      const SizedBox(height: 16),
+                      Text('No medications yet',
+                          style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: cs.onSurface
+                                  .withValues(alpha: 0.5))),
+                      const SizedBox(height: 8),
+                      Text('Add a medication for $patientName.',
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: cs.onSurface
+                                  .withValues(alpha: 0.35))),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        height: 48.0 * acc.buttonScaleFactor,
+                        child: ElevatedButton.icon(
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => CaregiverAddMedScreen(
+                                patientUid: patientUid,
+                                patientName: patientName,
+                              ),
+                            ),
+                          ),
+                          icon: const Icon(Icons.add,
+                              color: Colors.white, size: 18),
+                          label: const Text('Add Medication',
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 15)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: cs.primary,
+                            shape: RoundedRectangleBorder(
+                                borderRadius:
+                                    BorderRadius.circular(20)),
+                            elevation: 0,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: meds.length,
+                itemBuilder: (context, i) {
+                  final med = meds[i];
+                  return _MedCard(
+                    med: med,
+                    patientUid: patientUid,
+                    patientName: patientName,
+                    service: service,
+                  );
+                },
               );
             },
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -179,9 +215,9 @@ class CaregiverPatientMedsScreen extends StatelessWidget {
 // ── Med card ──────────────────────────────────────────────────────────────────
 
 class _MedCard extends StatelessWidget {
-  final MedicationModel med;
-  final String patientUid;
-  final String patientName;
+  final MedicationModel  med;
+  final String           patientUid;
+  final String           patientName;
   final CaregiverService service;
 
   const _MedCard({
@@ -195,9 +231,11 @@ class _MedCard extends StatelessWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Medication'),
-        content: Text('Are you sure you want to delete "${med.name}"?'),
+        content:
+            Text('Are you sure you want to delete "${med.name}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -208,7 +246,8 @@ class _MedCard extends StatelessWidget {
               Navigator.pop(ctx);
               await service.deleteMedication(patientUid, med.id!);
             },
-            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -228,53 +267,67 @@ class _MedCard extends StatelessWidget {
     );
   }
 
-  Widget _buildMedIcon() {
+  Widget _buildMedIcon(ColorScheme cs) {
     final imageUrl = med.imageUrl;
     if (imageUrl != null && imageUrl.isNotEmpty) {
       if (imageUrl.startsWith('data:')) {
         try {
-          final base64Data = imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
+          final b64 = imageUrl.contains(',')
+              ? imageUrl.split(',').last
+              : imageUrl;
           return ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: Image.memory(
-              base64Decode(base64Data),
+              base64Decode(b64),
               width: 48,
               height: 48,
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => _defaultIcon(),
+              errorBuilder: (_, __, ___) => _defaultIcon(cs),
             ),
           );
         } catch (_) {}
       }
     }
-    return _defaultIcon();
+    return _defaultIcon(cs);
   }
 
-  Widget _defaultIcon() => Container(
+  Widget _defaultIcon(ColorScheme cs) => Container(
         width: 48,
         height: 48,
         decoration: BoxDecoration(
-          color: const Color(0xFFF4F7FF),
+          color: cs.primary.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(12),
         ),
-        child: const Icon(Icons.medication_outlined,
-            color: Color(0xFF2BC8A7), size: 26),
+        child: Icon(Icons.medication_outlined,
+            color: cs.primary, size: 26),
       );
 
   @override
   Widget build(BuildContext context) {
+    final cs      = Theme.of(context).colorScheme;
+    final isDark  = Theme.of(context).brightness == Brightness.dark;
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+
     return GestureDetector(
       onTap: () => _openEdit(context),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: cardColor,
           borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black
+                  .withValues(alpha: isDark ? 0.25 : 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Row(
           children: [
-            _buildMedIcon(),
+            _buildMedIcon(cs),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -282,26 +335,33 @@ class _MedCard extends StatelessWidget {
                 children: [
                   Text(
                     med.name,
-                    style: const TextStyle(
+                    style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
-                        color: Colors.black87),
+                        color: cs.onSurface),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '${med.dose} ${med.unit}  ·  ${med.type}',
-                    style: const TextStyle(fontSize: 12, color: Colors.black45),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: cs.onSurface.withValues(alpha: 0.45)),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     '${_primaryTimeLabel()}  ·  ${_freqLabel()}',
-                    style: const TextStyle(fontSize: 12, color: Colors.black45),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: cs.onSurface.withValues(alpha: 0.45)),
                   ),
                   if (med.startingDate != null) ...[
                     const SizedBox(height: 3),
                     Text(
                       _dateRangeLabel(),
-                      style: const TextStyle(fontSize: 11, color: Colors.black38),
+                      style: TextStyle(
+                          fontSize: 11,
+                          color: cs.onSurface
+                              .withValues(alpha: 0.35)),
                     ),
                   ],
                 ],
@@ -309,14 +369,12 @@ class _MedCard extends StatelessWidget {
             ),
             Column(
               children: [
-                // Edit button
                 GestureDetector(
                   onTap: () => _openEdit(context),
-                  child: const Icon(Icons.edit_outlined,
-                      color: Color(0xFF2BC8A7), size: 20),
+                  child: Icon(Icons.edit_outlined,
+                      color: cs.primary, size: 20),
                 ),
                 const SizedBox(height: 10),
-                // Delete button
                 GestureDetector(
                   onTap: () => _confirmDelete(context),
                   child: const Icon(Icons.delete_outline,
@@ -332,8 +390,12 @@ class _MedCard extends StatelessWidget {
 
   String _primaryTimeLabel() {
     final t = med.intakeTimes.isNotEmpty ? med.intakeTimes.first : null;
-    final h = (t?['hour'] as int? ?? med.hour).toString().padLeft(2, '0');
-    final m = (t?['minute'] as int? ?? med.minute).toString().padLeft(2, '0');
+    final h = (t?['hour'] as int? ?? med.hour)
+        .toString()
+        .padLeft(2, '0');
+    final m = (t?['minute'] as int? ?? med.minute)
+        .toString()
+        .padLeft(2, '0');
     final p = t?['period'] as String? ?? med.period;
     return '$h:$m $p';
   }
@@ -356,7 +418,8 @@ class _MedCard extends StatelessWidget {
         return '${med.freqNumber}× / week';
       case 'Month':
         if (med.selectedMonthDays.isNotEmpty) {
-          final sorted = List<int>.from(med.selectedMonthDays)..sort();
+          final sorted =
+              List<int>.from(med.selectedMonthDays)..sort();
           return 'Day ${sorted.join(', ')} of month';
         }
         return '${med.freqNumber}× / month';

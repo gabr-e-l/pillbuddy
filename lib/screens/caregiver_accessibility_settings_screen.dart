@@ -1,70 +1,78 @@
-// lib/screens/accessibility_settings_screen.dart
+// lib/screens/caregiver_accessibility_settings_screen.dart
 //
-// Patient-side Accessibility Settings:
-//   • Auto-adapt from phone settings (toggle — when ON, all manual controls
-//     are disabled and the app mirrors the device's current mode / font / size)
+// Caregiver-side Accessibility Settings:
+//   • Auto-adapt from phone settings (toggle)
 //   • Theme: Light | Dark | High Contrast
 //   • Font Size: Small | Medium | Large | Extra-Large  (with % description)
 //   • Button Size: Normal | Large | Extra-Large         (with % description)
+//   • Live preview card with caregiver-themed content
 //
 // UPDATED:
 //   - Theme cards are equal-height, evenly aligned, and use a drop-shadow
 //     (not resize/border-shift) to indicate the active selection.
-//   - Font Size and Button Size rows now show percentage descriptions,
-//     matching the caregiver accessibility screen.
+//   - Uses CaregiverThemeWrapper. Text sizes NOT manually multiplied —
+//     the textScaler handles that. Only button heights use buttonScaleFactor.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../providers/accessibility_provider.dart';
+import '../providers/caregiver_accessibility_provider.dart';
+import '../providers/accessibility_provider.dart'
+    show AppThemeMode, FontSizeOption, ButtonSizeOption;
+import 'caregiver_theme_wrapper.dart';
 
-class AccessibilitySettingsScreen extends StatelessWidget {
-  const AccessibilitySettingsScreen({super.key});
+class CaregiverAccessibilitySettingsScreen extends StatelessWidget {
+  const CaregiverAccessibilitySettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.watch<AccessibilityProvider>();
-    final isAuto = acc.autoAdapt;
-    final colorScheme = Theme.of(context).colorScheme;
-    final primaryColor = colorScheme.primary;
+    return CaregiverThemeWrapper(
+      builder: (ctx, acc) {
+        final cs = Theme.of(ctx).colorScheme;
+        final isAuto = acc.autoAdapt;
+        final primary = cs.primary;
 
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      appBar: AppBar(
-        title: const Text(
-          'Accessibility',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        centerTitle: false,
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        foregroundColor: Theme.of(context).colorScheme.onSurface,
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _AutoAdaptCard(isAuto: isAuto, primaryColor: primaryColor),
-            const SizedBox(height: 24),
-            _SectionHeader(label: 'Appearance', primaryColor: primaryColor),
-            const SizedBox(height: 10),
-            _ThemeSelector(isLocked: isAuto),
-            const SizedBox(height: 24),
-            _SectionHeader(label: 'Text Size', primaryColor: primaryColor),
-            const SizedBox(height: 10),
-            _FontSizeSelector(isLocked: isAuto),
-            const SizedBox(height: 24),
-            _SectionHeader(label: 'Button Size', primaryColor: primaryColor),
-            const SizedBox(height: 10),
-            _ButtonSizeSelector(isLocked: isAuto),
-            const SizedBox(height: 24),
-            _SectionHeader(label: 'Preview', primaryColor: primaryColor),
-            const SizedBox(height: 10),
-            const _PreviewCard(),
-            const SizedBox(height: 32),
-          ],
-        ),
-      ),
+        return Scaffold(
+          backgroundColor: Theme.of(ctx).scaffoldBackgroundColor,
+          appBar: AppBar(
+            title: const Text(
+              'Accessibility',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            centerTitle: false,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            foregroundColor: cs.onSurface,
+          ),
+          body: SingleChildScrollView(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _AutoAdaptCard(isAuto: isAuto, primaryColor: primary),
+                const SizedBox(height: 24),
+                _SectionHeader(label: 'Appearance', primaryColor: primary),
+                const SizedBox(height: 10),
+                _ThemeSelector(isLocked: isAuto),
+                const SizedBox(height: 24),
+                _SectionHeader(label: 'Text Size', primaryColor: primary),
+                const SizedBox(height: 10),
+                _FontSizeSelector(isLocked: isAuto),
+                const SizedBox(height: 24),
+                _SectionHeader(
+                    label: 'Button Size', primaryColor: primary),
+                const SizedBox(height: 10),
+                _ButtonSizeSelector(isLocked: isAuto),
+                const SizedBox(height: 24),
+                _SectionHeader(label: 'Preview', primaryColor: primary),
+                const SizedBox(height: 10),
+                const _PreviewCard(),
+                const SizedBox(height: 32),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -74,15 +82,14 @@ class AccessibilitySettingsScreen extends StatelessWidget {
 class _AutoAdaptCard extends StatelessWidget {
   final bool isAuto;
   final Color primaryColor;
-
-  const _AutoAdaptCard({required this.isAuto, required this.primaryColor});
+  const _AutoAdaptCard(
+      {required this.isAuto, required this.primaryColor});
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.read<AccessibilityProvider>();
+    final acc = context.read<CaregiverAccessibilityProvider>();
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
-    final subtitleColor = isDark ? Colors.white60 : Colors.black45;
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -132,11 +139,16 @@ class _AutoAdaptCard extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   isAuto
-                      ? 'Mirroring your device mode, font & size'
-                      : 'Mirror your phone\'s display settings automatically',
+                      ? 'Mirroring your device mode & font'
+                      : 'Mirror your phone\'s display settings',
                   style: TextStyle(
                     fontSize: 12,
-                    color: isAuto ? Colors.white70 : subtitleColor,
+                    color: isAuto
+                        ? Colors.white70
+                        : Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withValues(alpha: 0.5),
                   ),
                 ),
               ],
@@ -161,8 +173,8 @@ class _AutoAdaptCard extends StatelessWidget {
 class _SectionHeader extends StatelessWidget {
   final String label;
   final Color primaryColor;
-
-  const _SectionHeader({required this.label, required this.primaryColor});
+  const _SectionHeader(
+      {required this.label, required this.primaryColor});
 
   @override
   Widget build(BuildContext context) {
@@ -183,7 +195,7 @@ class _SectionHeader extends StatelessWidget {
             fontSize: 14,
             fontWeight: FontWeight.w700,
             color: primaryColor,
-            letterSpacing: 0.5,
+            letterSpacing: 0.4,
           ),
         ),
       ],
@@ -200,7 +212,6 @@ class _ThemeOption {
   final Color bg;
   final Color iconColor;
   final Color borderColor;
-
   const _ThemeOption({
     required this.mode,
     required this.icon,
@@ -217,7 +228,7 @@ class _ThemeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.watch<AccessibilityProvider>();
+    final acc = context.watch<CaregiverAccessibilityProvider>();
     final primary = Theme.of(context).colorScheme.primary;
 
     final options = [
@@ -234,7 +245,7 @@ class _ThemeSelector extends StatelessWidget {
         icon: Icons.dark_mode_rounded,
         label: 'Dark',
         bg: const Color(0xFF1E1E2E),
-        iconColor: const Color(0xFF82B1FF),
+        iconColor: const Color(0xFF80CBC4),
         borderColor: Colors.grey.shade700,
       ),
       _ThemeOption(
@@ -250,7 +261,7 @@ class _ThemeSelector extends StatelessWidget {
     return Opacity(
       opacity: isLocked ? 0.45 : 1.0,
       child: IntrinsicHeight(
-        // IntrinsicHeight makes all cards the same height
+        // IntrinsicHeight forces all cards to share the tallest card's height
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: options.map((opt) {
@@ -266,7 +277,8 @@ class _ThemeSelector extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: opt.bg,
                     borderRadius: BorderRadius.circular(16),
-                    // Active: highlighted border + stronger shadow only
+                    // Active indicator: border colour + stronger drop shadow.
+                    // No size/padding shift so cards stay evenly aligned.
                     border: Border.all(
                       color: selected ? primary : opt.borderColor,
                       width: 1.5,
@@ -305,7 +317,7 @@ class _ThemeSelector extends StatelessWidget {
                               : Colors.black87,
                         ),
                       ),
-                      // Fixed-height space so cards don't shift when
+                      // Reserve fixed space so cards don't shift when
                       // the checkmark appears / disappears
                       const SizedBox(height: 6),
                       SizedBox(
@@ -335,17 +347,17 @@ class _FontSizeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.watch<AccessibilityProvider>();
+    final acc = context.watch<CaregiverAccessibilityProvider>();
     final primary = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final onSurface = Theme.of(context).colorScheme.onSurface;
 
     final options = [
-      (FontSizeOption.small,      12.0, 'Small',    '85% text scale'),
+      (FontSizeOption.small,      12.0, 'Small',    '90% text scale'),
       (FontSizeOption.medium,     16.0, 'Medium',   '100% — default'),
-      (FontSizeOption.large,      20.0, 'Large',    '120% text scale'),
-      (FontSizeOption.extraLarge, 24.0, 'X-Large',  '145% text scale'),
+      (FontSizeOption.large,      20.0, 'Large',    '115% text scale'),
+      (FontSizeOption.extraLarge, 24.0, 'X-Large',  '130% text scale'),
     ];
 
     return Opacity(
@@ -446,7 +458,7 @@ class _ButtonSizeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.watch<AccessibilityProvider>();
+    final acc = context.watch<CaregiverAccessibilityProvider>();
     final primary = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
@@ -485,7 +497,7 @@ class _ButtonSizeSelector extends StatelessWidget {
                 boxShadow: selected
                     ? [
                         BoxShadow(
-                          color: primary.withValues(alpha: 0.15),
+                          color: primary.withValues(alpha: 0.12),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         )
@@ -526,7 +538,7 @@ class _ButtonSizeSelector extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  // Live mini-button preview
+                  // Preview button
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     height: previewH,
@@ -550,7 +562,8 @@ class _ButtonSizeSelector extends StatelessWidget {
                   ),
                   const SizedBox(width: 10),
                   if (selected)
-                    Icon(Icons.check_circle_rounded, color: primary, size: 22)
+                    Icon(Icons.check_circle_rounded,
+                        color: primary, size: 22)
                   else
                     const SizedBox(width: 22),
                 ],
@@ -570,12 +583,11 @@ class _PreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.watch<AccessibilityProvider>();
+    final acc = context.watch<CaregiverAccessibilityProvider>();
     final primary = Theme.of(context).colorScheme.primary;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final onCard = isDark ? Colors.white : Colors.black87;
-
     final btnH = 44.0 * acc.buttonScaleFactor;
 
     return Container(
@@ -617,7 +629,7 @@ class _PreviewCard extends StatelessWidget {
           ),
           const SizedBox(height: 14),
           Text(
-            'Medication Reminder',
+            'Patient: Maria Santos',
             style: TextStyle(
               fontSize: 18,
               fontWeight: FontWeight.bold,
@@ -626,7 +638,7 @@ class _PreviewCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Take 1 tablet of Aspirin 100mg with water.',
+            'Metformin 500mg — taken today at 08:00 AM.',
             style: TextStyle(
               fontSize: 13,
               color: onCard.withValues(alpha: 0.6),
@@ -646,7 +658,7 @@ class _PreviewCard extends StatelessWidget {
                 elevation: 0,
               ),
               child: const Text(
-                'Mark as Taken',
+                'View Intake History',
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,

@@ -9,9 +9,15 @@
 //   • Grouped timeline — entries grouped by date, newest first
 //   • Adherence rate progress bar per group
 //   • Real-time Firestore stream from users/{patientUid}/intakes
+//
+// UPDATED: All text, colours, cards and buttons respect
+// CaregiverAccessibilityProvider (dark/HC/font/button scale).
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/caregiver_accessibility_provider.dart';
+import 'caregiver_theme_wrapper.dart';
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
@@ -44,7 +50,7 @@ class IntakeRecord {
   }
 }
 
-// ── Service helper (reads another user's intakes) ─────────────────────────────
+// ── Service helper ────────────────────────────────────────────────────────────
 
 class _CaregiverIntakeReader {
   final _db = FirebaseFirestore.instance;
@@ -97,22 +103,22 @@ class _CaregiverIntakeHistoryScreenState
     extends State<CaregiverIntakeHistoryScreen> {
   final _reader = _CaregiverIntakeReader();
 
-  _DateFilter _dateFilter = _DateFilter.all;
+  _DateFilter    _dateFilter     = _DateFilter.all;
   DateTimeRange? _customRange;
-  String? _selectedMedId; // null = all meds
-  String? _selectedMedName;
+  String?        _selectedMedId;
+  String?        _selectedMedName;
 
+  // Status palette – fixed, independent of theme
   static const _teal   = Color(0xFF2BC8A7);
   static const _orange = Color(0xFFFFA726);
   static const _grey   = Color(0xFF9E9E9E);
   static const _red    = Color(0xFFEF5350);
-  static const _bg     = Color(0xFFF4F7FF);
 
   // ── Filtering ─────────────────────────────────────────────────────────────
 
   bool _inDateRange(IntakeRecord r) {
     if (_dateFilter == _DateFilter.all) return true;
-    final now = DateTime.now();
+    final now   = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
     DateTime? from, to;
@@ -139,36 +145,28 @@ class _CaregiverIntakeHistoryScreenState
 
     final parts = r.date.split('-');
     if (parts.length != 3) return false;
-    final d = DateTime(
-        int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+    final d    = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
     final fromD = DateTime(from!.year, from.month, from.day);
     final toD   = DateTime(to!.year,   to.month,   to.day);
     return !d.isBefore(fromD) && !d.isAfter(toD);
   }
 
-  List<IntakeRecord> _apply(List<IntakeRecord> all) {
-    return all.where((r) {
-      if (!_inDateRange(r)) return false;
-      if (_selectedMedId != null && r.medId != _selectedMedId) return false;
-      return true;
-    }).toList();
-  }
+  List<IntakeRecord> _apply(List<IntakeRecord> all) => all.where((r) {
+        if (!_inDateRange(r)) return false;
+        if (_selectedMedId != null && r.medId != _selectedMedId) return false;
+        return true;
+      }).toList();
 
-  // ── Grouping ──────────────────────────────────────────────────────────────
-
-  /// Returns records grouped by date string, newest date first.
   Map<String, List<IntakeRecord>> _group(List<IntakeRecord> records) {
     final map = <String, List<IntakeRecord>>{};
     for (final r in records) {
       map.putIfAbsent(r.date, () => []).add(r);
     }
-    // Sort dates descending
-    final sorted = map.entries.toList()
-      ..sort((a, b) => b.key.compareTo(a.key));
+    final sorted = map.entries.toList()..sort((a, b) => b.key.compareTo(a.key));
     return Map.fromEntries(sorted);
   }
 
-  // ── Custom date picker ─────────────────────────────────────────────────────
+  // ── Pickers ───────────────────────────────────────────────────────────────
 
   Future<void> _pickCustomRange() async {
     final now = DateTime.now();
@@ -177,35 +175,33 @@ class _CaregiverIntakeHistoryScreenState
       firstDate: DateTime(now.year - 2),
       lastDate: now,
       initialDateRange: _customRange ??
-          DateTimeRange(
-              start: now.subtract(const Duration(days: 7)), end: now),
+          DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
       builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.light(primary: _teal),
-        ),
+        data: Theme.of(ctx)
+            .copyWith(colorScheme: const ColorScheme.light(primary: _teal)),
         child: child!,
       ),
     );
     if (range != null) {
       setState(() {
-        _customRange  = range;
-        _dateFilter   = _DateFilter.custom;
+        _customRange = range;
+        _dateFilter  = _DateFilter.custom;
       });
     }
   }
 
-  // ── Med filter picker ─────────────────────────────────────────────────────
-
   void _showMedFilter(List<IntakeRecord> all) {
-    // Collect unique meds from the current data
-    final meds = <String, String>{}; // medId → medName
+    final meds = <String, String>{};
     for (final r in all) {
       meds[r.medId] = r.medName;
     }
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final sheetBg = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final onSheet = isDark ? Colors.white : Colors.black87;
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
+      backgroundColor: sheetBg,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (ctx) => SafeArea(
@@ -214,26 +210,28 @@ class _CaregiverIntakeHistoryScreenState
           children: [
             const SizedBox(height: 12),
             Container(
-              width: 36,
-              height: 4,
+              width: 36, height: 4,
               decoration: BoxDecoration(
-                  color: Colors.grey[300],
+                  color: isDark ? Colors.white24 : Colors.grey[300],
                   borderRadius: BorderRadius.circular(2)),
             ),
             const SizedBox(height: 16),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text('Filter by Medication',
                     style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold)),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: onSheet)),
               ),
             ),
             const SizedBox(height: 8),
             ListTile(
               leading: const Icon(Icons.medication_outlined, color: _teal),
-              title: const Text('All Medications'),
+              title: Text('All Medications',
+                  style: TextStyle(color: onSheet)),
               trailing: _selectedMedId == null
                   ? const Icon(Icons.check, color: _teal)
                   : null,
@@ -246,9 +244,9 @@ class _CaregiverIntakeHistoryScreenState
               },
             ),
             ...meds.entries.map((e) => ListTile(
-                  leading:
-                      const Icon(Icons.medication, color: Colors.black45),
-                  title: Text(e.value),
+                  leading: Icon(Icons.medication,
+                      color: isDark ? Colors.white54 : Colors.black45),
+                  title: Text(e.value, style: TextStyle(color: onSheet)),
                   trailing: _selectedMedId == e.key
                       ? const Icon(Icons.check, color: _teal)
                       : null,
@@ -324,16 +322,12 @@ class _CaregiverIntakeHistoryScreenState
     return '$h:$m $p';
   }
 
-  // ── Summary stats ─────────────────────────────────────────────────────────
-
-  Map<String, int> _counts(List<IntakeRecord> records) {
-    return {
-      'taken':      records.where((r) => r.status == 'taken').length,
-      'taken_late': records.where((r) => r.status == 'taken_late').length,
-      'snoozed':    records.where((r) => r.status == 'snoozed').length,
-      'skipped':    records.where((r) => r.status == 'skipped').length,
-    };
-  }
+  Map<String, int> _counts(List<IntakeRecord> records) => {
+        'taken':      records.where((r) => r.status == 'taken').length,
+        'taken_late': records.where((r) => r.status == 'taken_late').length,
+        'snoozed':    records.where((r) => r.status == 'snoozed').length,
+        'skipped':    records.where((r) => r.status == 'skipped').length,
+      };
 
   double _adherenceRate(List<IntakeRecord> records) {
     if (records.isEmpty) return 0;
@@ -347,131 +341,139 @@ class _CaregiverIntakeHistoryScreenState
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _bg,
-      appBar: AppBar(
-        backgroundColor: _bg,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios,
-              size: 20, color: Colors.black87),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          children: [
-            Text(
-              widget.patientName,
-              style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black87),
+    return CaregiverThemeWrapper(
+      builder: (ctx, acc) {
+        final cs      = Theme.of(ctx).colorScheme;
+        final isDark  = Theme.of(ctx).brightness == Brightness.dark;
+        final bgColor = isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
+
+        return Scaffold(
+          backgroundColor: bgColor,
+          appBar: AppBar(
+            backgroundColor: bgColor,
+            elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back_ios, size: 20, color: cs.onSurface),
+              onPressed: () => Navigator.pop(context),
             ),
-            const Text(
-              'Intake Updates',
-              style: TextStyle(fontSize: 12, color: Colors.black45),
+            title: Column(
+              children: [
+                Text(
+                  widget.patientName,
+                  style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                      color: cs.onSurface),
+                ),
+                Text(
+                  'Intake Updates',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: cs.onSurface.withValues(alpha: 0.5)),
+                ),
+              ],
             ),
-          ],
-        ),
-        centerTitle: true,
-      ),
-      body: StreamBuilder<List<IntakeRecord>>(
-        stream: _reader.streamForPatient(widget.patientUid),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(
-                child: CircularProgressIndicator(color: _teal));
-          }
-          if (snap.hasError) {
-            return Center(
-              child: Text('Error: ${snap.error}',
-                  style: const TextStyle(color: Colors.redAccent)),
-            );
-          }
+            centerTitle: true,
+          ),
+          body: StreamBuilder<List<IntakeRecord>>(
+            stream: _reader.streamForPatient(widget.patientUid),
+            builder: (context, snap) {
+              if (snap.connectionState == ConnectionState.waiting) {
+                return const Center(
+                    child: CircularProgressIndicator(color: _teal));
+              }
+              if (snap.hasError) {
+                return Center(
+                  child: Text('Error: ${snap.error}',
+                      style: const TextStyle(color: Colors.redAccent)),
+                );
+              }
 
-          final all      = snap.data ?? [];
-          final filtered = _apply(all);
-          final grouped  = _group(filtered);
-          final counts   = _counts(filtered);
-          final rate     = _adherenceRate(filtered);
+              final all      = snap.data ?? [];
+              final filtered = _apply(all);
+              final grouped  = _group(filtered);
+              final counts   = _counts(filtered);
+              final rate     = _adherenceRate(filtered);
 
-          return Column(
-            children: [
-              // ── Filter bar ───────────────────────────────────────────
-              _buildFilterBar(all),
-
-              // ── Summary card ──────────────────────────────────────────
-              if (filtered.isNotEmpty)
-                _buildSummaryCard(counts, rate, filtered.length),
-
-              // ── Timeline ──────────────────────────────────────────────
-              Expanded(
-                child: filtered.isEmpty
-                    ? _buildEmpty()
-                    : ListView(
-                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                        children: grouped.entries.map((entry) {
-                          return _buildDayGroup(
-                              entry.key, entry.value);
-                        }).toList(),
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
+              return Column(
+                children: [
+                  _buildFilterBar(all, isDark, cs),
+                  if (filtered.isNotEmpty)
+                    _buildSummaryCard(counts, rate, isDark, cs),
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? _buildEmpty(isDark, cs)
+                        : ListView(
+                            padding:
+                                const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                            children: grouped.entries
+                                .map((e) => _buildDayGroup(
+                                    e.key, e.value, isDark, cs))
+                                .toList(),
+                          ),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
   // ── Filter bar ────────────────────────────────────────────────────────────
 
-  Widget _buildFilterBar(List<IntakeRecord> all) {
+  Widget _buildFilterBar(
+      List<IntakeRecord> all, bool isDark, ColorScheme cs) {
+    final chipBg     = isDark ? const Color(0xFF2A2A3E) : Colors.white;
+    final chipBorder = isDark ? Colors.white12 : Colors.grey.shade200;
+
     return Container(
-      color: _bg,
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      color: isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF4F7FF),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Date chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
-              children: [
-                ..._DateFilter.values.map((f) {
-                  final sel = _dateFilter == f;
-                  return GestureDetector(
-                    onTap: () async {
-                      if (f == _DateFilter.custom) {
-                        await _pickCustomRange();
-                      } else {
-                        setState(() => _dateFilter = f);
-                      }
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      margin: const EdgeInsets.only(right: 8),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: sel ? _teal : Colors.white,
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: sel ? _teal : Colors.grey.shade200,
-                        ),
-                      ),
-                      child: Text(
-                        f == _DateFilter.custom && _customRange != null
-                            ? '${_customRange!.start.day}/${_customRange!.start.month} – ${_customRange!.end.day}/${_customRange!.end.month}'
-                            : f.label,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: sel ? Colors.white : Colors.black54,
-                        ),
+              children: _DateFilter.values.map((f) {
+                final sel = _dateFilter == f;
+                return GestureDetector(
+                  onTap: () async {
+                    if (f == _DateFilter.custom) {
+                      await _pickCustomRange();
+                    } else {
+                      setState(() => _dateFilter = f);
+                    }
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: sel ? _teal : chipBg,
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                          color: sel ? _teal : chipBorder),
+                    ),
+                    child: Text(
+                      f == _DateFilter.custom && _customRange != null
+                          ? '${_customRange!.start.day}/${_customRange!.start.month}'
+                              ' – ${_customRange!.end.day}/${_customRange!.end.month}'
+                          : f.label,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: sel
+                            ? Colors.white
+                            : cs.onSurface.withValues(alpha: 0.6),
                       ),
                     ),
-                  );
-                }),
-              ],
+                  ),
+                );
+              }).toList(),
             ),
           ),
           const SizedBox(height: 8),
@@ -483,14 +485,12 @@ class _CaregiverIntakeHistoryScreenState
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
               decoration: BoxDecoration(
                 color: _selectedMedId != null
-                    ? _teal.withOpacity(0.1)
-                    : Colors.white,
+                    ? _teal.withValues(alpha: 0.12)
+                    : chipBg,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: _selectedMedId != null
-                      ? _teal
-                      : Colors.grey.shade200,
-                ),
+                  color:
+                      _selectedMedId != null ? _teal : chipBorder),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -499,7 +499,7 @@ class _CaregiverIntakeHistoryScreenState
                       size: 14,
                       color: _selectedMedId != null
                           ? _teal
-                          : Colors.black45),
+                          : cs.onSurface.withValues(alpha: 0.45)),
                   const SizedBox(width: 6),
                   Text(
                     _selectedMedName ?? 'All Medications',
@@ -508,7 +508,7 @@ class _CaregiverIntakeHistoryScreenState
                       fontWeight: FontWeight.w600,
                       color: _selectedMedId != null
                           ? _teal
-                          : Colors.black54,
+                          : cs.onSurface.withValues(alpha: 0.6),
                     ),
                   ),
                   const SizedBox(width: 4),
@@ -516,7 +516,7 @@ class _CaregiverIntakeHistoryScreenState
                       size: 16,
                       color: _selectedMedId != null
                           ? _teal
-                          : Colors.black38),
+                          : cs.onSurface.withValues(alpha: 0.4)),
                 ],
               ),
             ),
@@ -528,33 +528,35 @@ class _CaregiverIntakeHistoryScreenState
 
   // ── Summary card ──────────────────────────────────────────────────────────
 
-  Widget _buildSummaryCard(
-      Map<String, int> counts, double rate, int total) {
-    final pct = (rate * 100).round();
+  Widget _buildSummaryCard(Map<String, int> counts, double rate,
+      bool isDark, ColorScheme cs) {
+    final pct       = (rate * 100).round();
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final labelClr  = cs.onSurface.withValues(alpha: 0.55);
+
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 4, 16, 8),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.05),
+              color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
               blurRadius: 8,
-              offset: const Offset(0, 3))
+              offset: const Offset(0, 3)),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Adherence rate
           Row(
             children: [
-              const Text('Adherence Rate',
+              Text('Adherence Rate',
                   style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: Colors.black54)),
+                      color: labelClr)),
               const Spacer(),
               Text(
                 '$pct%',
@@ -576,31 +578,27 @@ class _CaregiverIntakeHistoryScreenState
             child: LinearProgressIndicator(
               value: rate,
               minHeight: 7,
-              backgroundColor: Colors.grey.shade100,
+              backgroundColor:
+                  isDark ? Colors.white12 : Colors.grey.shade100,
               valueColor: AlwaysStoppedAnimation<Color>(
-                pct >= 80
-                    ? _teal
-                    : pct >= 50
-                        ? _orange
-                        : _red,
+                pct >= 80 ? _teal : pct >= 50 ? _orange : _red,
               ),
             ),
           ),
           const SizedBox(height: 14),
-          // Stat chips
           Row(
             children: [
               _statChip(Icons.check_circle_rounded, _teal,
-                  counts['taken']!, 'Taken'),
+                  counts['taken']!, 'Taken', isDark),
               const SizedBox(width: 8),
               _statChip(Icons.watch_later_rounded, _orange,
-                  counts['taken_late']!, 'Late'),
+                  counts['taken_late']!, 'Late', isDark),
               const SizedBox(width: 8),
               _statChip(Icons.snooze_rounded, _grey,
-                  counts['snoozed']!, 'Snoozed'),
+                  counts['snoozed']!, 'Snoozed', isDark),
               const SizedBox(width: 8),
               _statChip(Icons.cancel_rounded, _red,
-                  counts['skipped']!, 'Skipped'),
+                  counts['skipped']!, 'Skipped', isDark),
             ],
           ),
         ],
@@ -608,33 +606,29 @@ class _CaregiverIntakeHistoryScreenState
     );
   }
 
-  Widget _statChip(
-      IconData icon, Color color, int count, String label) {
+  Widget _statChip(IconData icon, Color color, int count, String label,
+      bool isDark) {
     return Expanded(
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
+          color: color.withValues(alpha: isDark ? 0.15 : 0.08),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Column(
           children: [
             Icon(icon, color: color, size: 20),
             const SizedBox(height: 3),
-            Text(
-              '$count',
-              style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                  color: color),
-            ),
-            Text(
-              label,
-              style: const TextStyle(
-                  fontSize: 10,
-                  color: Colors.black45,
-                  fontWeight: FontWeight.w500),
-            ),
+            Text('$count',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: color)),
+            Text(label,
+                style: TextStyle(
+                    fontSize: 10,
+                    color: isDark ? Colors.white54 : Colors.black45,
+                    fontWeight: FontWeight.w500)),
           ],
         ),
       ),
@@ -643,25 +637,27 @@ class _CaregiverIntakeHistoryScreenState
 
   // ── Day group ─────────────────────────────────────────────────────────────
 
-  Widget _buildDayGroup(String dateStr, List<IntakeRecord> records) {
+  Widget _buildDayGroup(String dateStr, List<IntakeRecord> records,
+      bool isDark, ColorScheme cs) {
     final taken = records
         .where((r) => r.status == 'taken' || r.status == 'taken_late')
         .length;
-    final rate = records.isEmpty ? 0.0 : taken / records.length;
+    final rate       = records.isEmpty ? 0.0 : taken / records.length;
+    final headerClr  = cs.onSurface.withValues(alpha: 0.55);
+    final countColor = cs.onSurface.withValues(alpha: 0.4);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 16),
-        // Date header
         Row(
           children: [
             Text(
               _friendlyDate(dateStr),
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w700,
-                  color: Colors.black54),
+                  color: headerClr),
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -670,106 +666,102 @@ class _CaregiverIntakeHistoryScreenState
                 child: LinearProgressIndicator(
                   value: rate,
                   minHeight: 4,
-                  backgroundColor: Colors.grey.shade100,
+                  backgroundColor:
+                      isDark ? Colors.white12 : Colors.grey.shade100,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                      rate >= 0.8 ? _teal : rate >= 0.5 ? _orange : _red),
+                      rate >= 0.8
+                          ? _teal
+                          : rate >= 0.5
+                              ? _orange
+                              : _red),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Text(
               '$taken/${records.length}',
-              style: const TextStyle(
+              style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: Colors.black38),
+                  color: countColor),
             ),
           ],
         ),
         const SizedBox(height: 8),
-        // Record cards
-        ...records.map((r) => _buildRecordCard(r)),
+        ...records.map((r) => _buildRecordCard(r, isDark, cs)),
       ],
     );
   }
 
-  Widget _buildRecordCard(IntakeRecord r) {
-    final color = _statusColor(r.status);
-    final icon  = _statusIcon(r.status);
-    final label = _statusLabel(r.status);
-    final time  = _timeOf(r);
+  Widget _buildRecordCard(
+      IntakeRecord r, bool isDark, ColorScheme cs) {
+    final color     = _statusColor(r.status);
+    final icon      = _statusIcon(r.status);
+    final label     = _statusLabel(r.status);
+    final time      = _timeOf(r);
+    final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
+    final nameColor = cs.onSurface;
+    final timeColor = cs.onSurface.withValues(alpha: 0.4);
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.25), width: 1),
+        border: Border.all(
+            color: color.withValues(alpha: isDark ? 0.35 : 0.2), width: 1),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
               blurRadius: 6,
-              offset: const Offset(0, 2))
+              offset: const Offset(0, 2)),
         ],
       ),
       child: Row(
         children: [
-          // Status icon
           Container(
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.1),
+              color: color.withValues(alpha: isDark ? 0.18 : 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
             child: Icon(icon, color: color, size: 22),
           ),
           const SizedBox(width: 12),
-          // Med name + status
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  r.medName,
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.black87),
-                ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        label,
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: color),
-                      ),
-                    ),
-                  ],
+                Text(r.medName,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: nameColor)),
+                const SizedBox(height: 3),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: isDark ? 0.18 : 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(label,
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: color)),
                 ),
               ],
             ),
           ),
-          // Recorded-at time
           if (time.isNotEmpty)
-            Text(
-              time,
-              style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.black38),
-            ),
+            Text(time,
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: timeColor)),
         ],
       ),
     );
@@ -777,25 +769,27 @@ class _CaregiverIntakeHistoryScreenState
 
   // ── Empty state ────────────────────────────────────────────────────────────
 
-  Widget _buildEmpty() {
+  Widget _buildEmpty(bool isDark, ColorScheme cs) {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(Icons.history_rounded, size: 72, color: Colors.grey[300]),
+          Icon(Icons.history_rounded,
+              size: 72,
+              color: cs.onSurface.withValues(alpha: 0.2)),
           const SizedBox(height: 16),
-          const Text(
-            'No intake records',
-            style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Colors.black54),
-          ),
+          Text('No intake records',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: cs.onSurface.withValues(alpha: 0.5))),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             'Records will appear here once\nthe patient logs their doses.',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 13, color: Colors.black38),
+            style: TextStyle(
+                fontSize: 13,
+                color: cs.onSurface.withValues(alpha: 0.35)),
           ),
         ],
       ),
