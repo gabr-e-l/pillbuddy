@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple bitmap wrapper that points to the generated mipmap launcher icon.
+     Using a drawable here lets notifications reference a drawable resource
+     which some OEMs prefer for the small/status icon. -->
+<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
+    android:src="@mipmap/ic_launcher"
+    android:gravity="center" />

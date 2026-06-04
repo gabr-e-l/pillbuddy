@@ -28,6 +28,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
+import 'dart:io';
+import 'package:flutter/services.dart' show rootBundle;
 
 import 'intake_service.dart'; // needed to auto-record 'skipped' at final alert
 
@@ -190,18 +192,34 @@ class NotificationService {
 
   /// High-priority alarm notification that bypasses DND.
   /// Uses alarm_sound.wav from res/raw.
-  NotificationDetails _alarmDetails({
+  Future<String> _writeAppIconToTempFile() async {
+    try {
+      final data = await rootBundle.load('assets/images/app_icon.png');
+      final bytes = data.buffer.asUint8List();
+      final dir = await Directory.systemTemp.createTemp('pillbuddy_icons_');
+      final file = File('${dir.path}/app_icon.png');
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (e) {
+      debugPrint('[NotificationService] Failed to write app icon to temp file: $e');
+      rethrow;
+    }
+  }
+
+  Future<NotificationDetails> _alarmDetails({
     required int stage,
     required String medName,
-  }) {
-    return const NotificationDetails(
+  }) async {
+    final iconPath = await _writeAppIconToTempFile();
+    return NotificationDetails(
       android: AndroidNotificationDetails(
         _alarmChannelId,
         'Medication Alarms',
         channelDescription: 'Urgent alerts for scheduled medication doses',
         importance: Importance.max,
         priority: Priority.max,
-        icon: '@mipmap/ic_launcher',
+        icon: '@drawable/ic_stat_notify',
+        largeIcon: FilePathAndroidBitmap(iconPath),
         sound: RawResourceAndroidNotificationSound('alarm_sound'),
         playSound: true,
         enableVibration: true,
@@ -210,7 +228,7 @@ class NotificationService {
         fullScreenIntent: true,
         visibility: NotificationVisibility.public,
       ),
-      iOS: DarwinNotificationDetails(
+      iOS: const DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
@@ -220,17 +238,19 @@ class NotificationService {
     );
   }
 
-  NotificationDetails _caregiverDetails() {
-    return const NotificationDetails(
+  Future<NotificationDetails> _caregiverDetails() async {
+    final iconPath = await _writeAppIconToTempFile();
+    return NotificationDetails(
       android: AndroidNotificationDetails(
         _caregiverChannelId,
         'Patient Intake Updates',
         channelDescription: 'Notifications when a patient marks a dose',
         importance: Importance.defaultImportance,
         priority: Priority.defaultPriority,
-        icon: '@mipmap/ic_launcher',
+        icon: '@drawable/ic_stat_notify',
+        largeIcon: FilePathAndroidBitmap(iconPath),
       ),
-      iOS: DarwinNotificationDetails(
+      iOS: const DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
@@ -281,7 +301,7 @@ class NotificationService {
       '💊 Time for $medName',
       '$doseLabel — scheduled at $timeLabel',
       base,
-      _alarmDetails(stage: 0, medName: medName),
+      await _alarmDetails(stage: 0, medName: medName),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -295,7 +315,7 @@ class NotificationService {
       '⏰ Reminder: $medName',
       "You haven't marked $medName as taken yet.",
       base.add(const Duration(minutes: 10)),
-      _alarmDetails(stage: 1, medName: medName),
+      await _alarmDetails(stage: 1, medName: medName),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -309,7 +329,7 @@ class NotificationService {
       '⚠️ Final Alert: $medName',
       '$medName ($doseLabel) has been recorded as a missed dose.',
       base.add(const Duration(minutes: 20)),
-      _alarmDetails(stage: 2, medName: medName),
+      await _alarmDetails(stage: 2, medName: medName),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
@@ -388,7 +408,7 @@ class NotificationService {
       _caregiverId(patientUid, medName),
       '$emoji $patientName — $medName',
       '$label at $timeStr',
-      _caregiverDetails(),
+      await _caregiverDetails(),
     );
   }
 
