@@ -1,17 +1,25 @@
 // lib/screens/patient_home.dart
 //
-// Fixes applied in this version:
-//   1. Dark mode + high-contrast: all hardcoded Colors.white / Color(0xFFF4F7FF)
-//      replaced with Theme.of(context) surface/background values so the
-//      AccessibilityProvider's themeMode actually takes effect on every widget.
-//   2. Button size: "Mark as" / status pill and action-sheet tiles now scale
-//      their height/padding via AccessibilityProvider.buttonScaleFactor.
-//   3. Mark-As bottom-sheet overflow: switched to isScrollControlled:true and
-//      MediaQuery.viewInsetsOf(context).bottom so the system nav-bar never clips
-//      the last option.
-//   4. Light-text fixes: med name and action-tile label/subtitle in the
-//      bottom-sheet are now explicitly dark (Theme onSurface) so they are
-//      readable on white and on dark backgrounds alike.
+// Skipped-dose optimisation:
+//
+//   A dose is considered "past its intake window" and treated as Skipped when:
+//     (a) The selected date is any day BEFORE today, OR
+//     (b) The selected date is today AND the scheduled time + 20 min has
+//         already passed (i.e. the final alarm window has closed).
+//
+//   For any such expired, unmarked dose:
+//     • It is automatically recorded as 'skipped' in Firestore the first time
+//       the patient views that date (write-once: only if no status exists yet).
+//     • In the Mark-As sheet:
+//         – "Taken"      → always greyed-out (disabled)
+//         – "Taken Late" → ACTIVE (patient may correct the auto-skip)
+//         – "Skipped"    → info row showing "auto-recorded"
+//
+//   For today's doses still within the alarm window, the existing three-stage
+//   logic applies (stage 0 → Taken only; stage 1 → Taken Late only; stage 2
+//   → same as expired).
+//
+//   'Snoozed' has been fully removed.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -23,11 +31,39 @@ import '../services/intake_service.dart';
 import '../services/auth_service.dart';
 import '../services/profile_service.dart';
 import '../providers/accessibility_provider.dart';
+import '../services/notification_service.dart';
 import 'login_screen.dart';
 import 'profile_settings_screen.dart';
 import 'accessibility_settings_screen.dart';
 import 'notification_settings_screen.dart';
-import '../services/notification_service.dart';
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+bool _isPastDate(DateTime date) {
+  final today = DateTime.now();
+  final d = DateTime(date.year, date.month, date.day);
+  final t = DateTime(today.year, today.month, today.day);
+  return d.isBefore(t);
+}
+
+bool _isToday(DateTime date) {
+  final now = DateTime.now();
+  return date.year == now.year &&
+      date.month == now.month &&
+      date.day == now.day;
+}
+
+/// True when the 20-minute alarm window for [med] on [date] has elapsed.
+bool _isWindowExpired(MedicationModel med, DateTime date) {
+  if (_isPastDate(date)) return true;
+  if (!_isToday(date)) return false;
+  final h24 = med.hour % 12 + (med.period == 'PM' ? 12 : 0);
+  final scheduled =
+      DateTime(date.year, date.month, date.day, h24, med.minute);
+  return DateTime.now().isAfter(scheduled.add(const Duration(minutes: 20)));
+}
+
+// ── Root widget ───────────────────────────────────────────────────────────────
 
 class PatientHome extends StatefulWidget {
   const PatientHome({super.key});
@@ -38,12 +74,10 @@ class PatientHome extends StatefulWidget {
 
 class _PatientHomeState extends State<PatientHome> {
   int _selectedIndex = 0;
-  DateTime _selectedDate = DateTime.now();
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // bg is slightly tinted in light mode, neutral in dark
     final scaffoldBg = theme.brightness == Brightness.dark
         ? theme.scaffoldBackgroundColor
         : const Color(0xFFF4F7FF);
@@ -53,7 +87,7 @@ class _PatientHomeState extends State<PatientHome> {
       body: IndexedStack(
         index: _selectedIndex,
         children: [
-          _TodayTab(selectedDate: _selectedDate),
+          const _TodayTab(),
           const _PatientSettingsTab(),
         ],
       ),
@@ -69,13 +103,9 @@ class _PatientHomeState extends State<PatientHome> {
         unselectedLabelStyle: const TextStyle(fontSize: 12),
         items: const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.medication_outlined),
-            label: 'My Meds',
-          ),
+              icon: Icon(Icons.medication_outlined), label: 'My Meds'),
           BottomNavigationBarItem(
-            icon: Icon(Icons.settings_outlined),
-            label: 'Settings',
-          ),
+              icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
       ),
     );
@@ -85,37 +115,38 @@ class _PatientHomeState extends State<PatientHome> {
 // ── Today tab ─────────────────────────────────────────────────────────────────
 
 class _TodayTab extends StatefulWidget {
-  final DateTime selectedDate;
-  const _TodayTab({required this.selectedDate});
+  const _TodayTab();
 
   @override
   State<_TodayTab> createState() => _TodayTabState();
 }
 
 class _TodayTabState extends State<_TodayTab> {
-  final _medService = MedicationService();
-  final _intakeService = IntakeService();
+  final _medService     = MedicationService();
+  final _intakeService  = IntakeService();
   final _profileService = ProfileService();
-  final _notifService = NotificationService();
-  DateTime _selectedDate = DateTime.now();
+  final _notifService   = NotificationService();
 
+  DateTime _selectedDate = DateTime.now();
   late final List<DateTime> _calendarDays;
+
+  // Tracks "{date}_{medId}" keys that have already been auto-skipped THIS
+  // session. Once a key is in this set we never write to Firestore again,
+  // so a patient's "Taken Late" correction cannot be overwritten.
+  final Set<String> _autoSkippedKeys = {};
 
   @override
   void initState() {
     super.initState();
     final today = DateTime.now();
-    _calendarDays = List.generate(
-      14,
-      (i) => today.subtract(Duration(days: 3 - i)),
-    );
-    // Initialise local notifications when the patient home loads.
+    _calendarDays =
+        List.generate(14, (i) => today.subtract(Duration(days: 3 - i)));
     _notifService.init();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final theme     = Theme.of(context);
     final onSurface = theme.colorScheme.onSurface;
 
     return SafeArea(
@@ -127,12 +158,15 @@ class _TodayTabState extends State<_TodayTab> {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Text(
-              "Today's Medications",
+              _isToday(_selectedDate)
+                  ? "Today's Medications"
+                  : _isPastDate(_selectedDate)
+                      ? 'Past Medications'
+                      : 'Upcoming Medications',
               style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: onSurface,
-              ),
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: onSurface),
             ),
           ),
           Expanded(child: _buildMedList()),
@@ -153,19 +187,14 @@ class _TodayTabState extends State<_TodayTab> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Hello, $name 👋',
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: onSurface,
-                ),
-              ),
-              Text(
-                "Here are your medications for today.",
-                style:
-                    TextStyle(fontSize: 14, color: onSurface.withOpacity(0.5)),
-              ),
+              Text('Hello, $name 👋',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: onSurface)),
+              Text('Here are your medications for today.',
+                  style: TextStyle(
+                      fontSize: 14, color: onSurface.withOpacity(0.5))),
             ],
           ),
         );
@@ -174,8 +203,8 @@ class _TodayTabState extends State<_TodayTab> {
   }
 
   Widget _buildHorizontalCalendar(ThemeData theme) {
-    final primary = theme.colorScheme.primary;
-    final surface = theme.colorScheme.surface;
+    final primary   = theme.colorScheme.primary;
+    final surface   = theme.colorScheme.surface;
     final onSurface = theme.colorScheme.onSurface;
 
     return SizedBox(
@@ -185,9 +214,9 @@ class _TodayTabState extends State<_TodayTab> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         itemCount: _calendarDays.length,
         itemBuilder: (context, i) {
-          final day = _calendarDays[i];
+          final day        = _calendarDays[i];
           final isSelected = _isSameDay(day, _selectedDate);
-          final isToday = _isSameDay(day, DateTime.now());
+          final isToday    = _isSameDay(day, DateTime.now());
           return GestureDetector(
             onTap: () => setState(() => _selectedDate = day),
             child: AnimatedContainer(
@@ -215,14 +244,11 @@ class _TodayTabState extends State<_TodayTab> {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  Text(
-                    '${day.day}',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: isSelected ? Colors.white : onSurface,
-                    ),
-                  ),
+                  Text('${day.day}',
+                      style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: isSelected ? Colors.white : onSurface)),
                 ],
               ),
             ),
@@ -233,7 +259,7 @@ class _TodayTabState extends State<_TodayTab> {
   }
 
   Widget _buildMedList() {
-    final theme = Theme.of(context);
+    final theme     = Theme.of(context);
     final onSurface = theme.colorScheme.onSurface;
 
     return StreamBuilder<List<MedicationModel>>(
@@ -253,10 +279,9 @@ class _TodayTabState extends State<_TodayTab> {
         }
 
         final allMeds = medSnap.data ?? [];
-        final meds =
-            allMeds.where((med) => med.isActiveOn(_selectedDate)).toList();
+        final meds    = allMeds.where((m) => m.isActiveOn(_selectedDate)).toList();
 
-        // Schedule / refresh local reminders for all active medications.
+        // Schedule reminders only for today's active meds.
         for (final med in allMeds.where((m) => m.isActiveOn(DateTime.now()))) {
           _notifService.schedulePatientReminder(
             medId:   med.id ?? med.name,
@@ -269,9 +294,7 @@ class _TodayTabState extends State<_TodayTab> {
           );
         }
 
-        if (meds.isEmpty && allMeds.isEmpty) {
-          return _buildEmptyState(onSurface);
-        }
+        if (meds.isEmpty && allMeds.isEmpty) return _buildEmptyState(onSurface);
 
         if (meds.isEmpty) {
           return Center(
@@ -281,19 +304,15 @@ class _TodayTabState extends State<_TodayTab> {
                 Icon(Icons.event_available_outlined,
                     size: 64, color: onSurface.withOpacity(0.2)),
                 const SizedBox(height: 12),
-                Text(
-                  'No medications on this date',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: onSurface.withOpacity(0.45)),
-                ),
+                Text('No medications on this date',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: onSurface.withOpacity(0.45))),
                 const SizedBox(height: 6),
-                Text(
-                  'Check a different date',
-                  style: TextStyle(
-                      fontSize: 13, color: onSurface.withOpacity(0.35)),
-                ),
+                Text('Check a different date',
+                    style: TextStyle(
+                        fontSize: 13, color: onSurface.withOpacity(0.35))),
               ],
             ),
           );
@@ -302,27 +321,80 @@ class _TodayTabState extends State<_TodayTab> {
         return StreamBuilder<Map<String, String>>(
           stream: _intakeService.intakesForDateStream(_selectedDate),
           builder: (context, intakeSnap) {
-            final intakes = intakeSnap.data ?? {};
+            final intakes      = intakeSnap.data ?? {};
+            final selectedDate = _selectedDate;
+
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
               itemCount: meds.length,
               itemBuilder: (context, i) {
-                final med = meds[i];
-                final status = intakes[med.id];
+                final med   = meds[i];
+                final medId = med.id!;
+                String? status = intakes[medId];
+
+                // ── Auto-skip logic ──────────────────────────────
+                // Rules:
+                //  • Only fires when the intake window has expired.
+                //  • Never overwrites 'taken' or 'taken_late' — those are
+                //    patient corrections that must be preserved.
+                //  • Uses _autoSkippedKeys (a session-level Set) as a
+                //    write-once guard. Once a key like "2024-06-01_medId"
+                //    is in the set we NEVER write to Firestore again, even
+                //    if the stream momentarily emits null on re-subscription
+                //    (e.g. after navigating away and back). This is the root
+                //    cause of the revert bug: the stream briefly returns an
+                //    empty map before the real data arrives, and without this
+                //    guard the auto-skip would fire again and overwrite the
+                //    patient's 'taken_late' correction with 'skipped'.
+                if (_isWindowExpired(med, selectedDate)) {
+                  if (status == 'taken' || status == 'taken_late') {
+                    // Patient has already corrected this — do nothing.
+                  } else {
+                    final skipKey =
+                        '\${selectedDate.year}-'
+                        "\${selectedDate.month.toString().padLeft(2, '0')}-"
+                        "\${selectedDate.day.toString().padLeft(2, '0')}"
+                        '_\$medId';
+                    if (!_autoSkippedKeys.contains(skipKey)) {
+                      _autoSkippedKeys.add(skipKey);
+                      _intakeService.recordIntake(
+                        medId:   medId,
+                        medName: med.name,
+                        status:  'skipped',
+                        date:    selectedDate,
+                      );
+                    }
+                    status = 'skipped';
+                  }
+                }
+
                 return _MedCard(
-                  med: med,
-                  status: status,
-                  selectedDate: _selectedDate,
+                  med:          med,
+                  status:       status,
+                  selectedDate: selectedDate,
                   onStatusChanged: (newStatus) async {
+                    // When the patient actively sets a status (especially
+                    // 'taken_late' to correct an auto-skip), remove the
+                    // skipKey from _autoSkippedKeys so future stream
+                    // re-emissions see the real Firestore status and the
+                    // auto-skip block's "status == taken_late" guard works
+                    // correctly on the very next rebuild.
+                    final skipKey =
+                        '\${selectedDate.year}-'
+                        "\${selectedDate.month.toString().padLeft(2, '0')}-"
+                        "\${selectedDate.day.toString().padLeft(2, '0')}"
+                        '_\$medId';
+                    _autoSkippedKeys.remove(skipKey);
+
                     if (newStatus == null) {
                       await _intakeService.deleteIntake(
-                          medId: med.id!, date: _selectedDate);
+                          medId: medId, date: selectedDate);
                     } else {
                       await _intakeService.recordIntake(
-                        medId: med.id!,
+                        medId:   medId,
                         medName: med.name,
-                        status: newStatus,
-                        date: _selectedDate,
+                        status:  newStatus,
+                        date:    selectedDate,
                       );
                     }
                   },
@@ -343,21 +415,16 @@ class _TodayTabState extends State<_TodayTab> {
           Icon(Icons.medication_outlined,
               size: 72, color: onSurface.withOpacity(0.2)),
           const SizedBox(height: 16),
-          Text(
-            'No medications scheduled',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: onSurface.withOpacity(0.45),
-            ),
-          ),
+          Text('No medications scheduled',
+              style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: onSurface.withOpacity(0.45))),
           const SizedBox(height: 8),
-          Text(
-            "Your caregiver hasn't added\nany medications yet.",
-            textAlign: TextAlign.center,
-            style:
-                TextStyle(fontSize: 13, color: onSurface.withOpacity(0.35)),
-          ),
+          Text("Your caregiver hasn't added\nany medications yet.",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                  fontSize: 13, color: onSurface.withOpacity(0.35))),
         ],
       ),
     );
@@ -375,10 +442,10 @@ class _TodayTabState extends State<_TodayTab> {
 // ── Medication card ───────────────────────────────────────────────────────────
 
 class _MedCard extends StatefulWidget {
-  final MedicationModel med;
-  final String? status;
-  final DateTime selectedDate;
-  final Future<void> Function(String? status) onStatusChanged;
+  final MedicationModel                med;
+  final String?                        status;
+  final DateTime                       selectedDate;
+  final Future<void> Function(String?) onStatusChanged;
 
   const _MedCard({
     required this.med,
@@ -393,192 +460,172 @@ class _MedCard extends StatefulWidget {
 
 class _MedCardState extends State<_MedCard> {
   String? _localStatus;
-  bool _saving = false;
+  bool    _saving     = false;
+  int     _alertStage = 0;
+
+  final _notifService = NotificationService();
 
   @override
   void initState() {
     super.initState();
     _localStatus = widget.status;
+    _refreshStage();
   }
 
   @override
-  void didUpdateWidget(_MedCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.status != widget.status) {
-      _localStatus = widget.status;
-    }
+  void didUpdateWidget(_MedCard old) {
+    super.didUpdateWidget(old);
+    if (old.status != widget.status) _localStatus = widget.status;
+  }
+
+  Future<void> _refreshStage() async {
+    if (!_isToday(widget.selectedDate)) return;
+    final stage = await _notifService.getAlertStage(widget.med.id ?? widget.med.name);
+    if (mounted) setState(() => _alertStage = stage);
   }
 
   MedicationModel get med => widget.med;
 
-  Color get _statusColor {
-    return switch (_localStatus) {
-      'taken' => const Color(0xFF2BC8A7),
-      'taken_late' => const Color(0xFFFFA726),
-      'skipped' => const Color(0xFFEF5350),
-      'snoozed' => const Color(0xFF9E9E9E),
-      _ => const Color(0xFF3B71FE),
-    };
-  }
+  bool get _windowExpired => _isWindowExpired(med, widget.selectedDate);
 
-  String get _statusLabel {
-    return switch (_localStatus) {
-      'taken' => 'Taken ✓',
-      'taken_late' => 'Taken Late',
-      'skipped' => 'Skipped',
-      'snoozed' => 'Snoozed',
-      _ => 'Mark as',
-    };
-  }
+  // Taken is only active on today, stage 0, window not yet expired.
+  bool get _takenActive => !_windowExpired && _alertStage == 0;
 
-  static Widget _buildMedImage(String imageUrl) {
-    if (imageUrl.startsWith('data:')) {
-      try {
-        final b64 =
-            imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
-        return Image.memory(
-          base64Decode(b64),
-          width: 40,
-          height: 40,
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => const SizedBox.shrink(),
-        );
-      } catch (_) {}
-    }
-    return const SizedBox.shrink();
-  }
+  // Taken Late is active whenever the window has expired OR stage >= 1.
+  bool get _takenLateActive => _windowExpired || _alertStage >= 1;
 
-  Future<void> _handleStatusChange(
-      BuildContext context, String? newStatus) async {
+  // Show Skipped as an info row (not a button) when window expired or stage 2.
+  bool get _showSkippedInfo => _windowExpired || _alertStage >= 2;
+
+  Color get _statusColor => switch (_localStatus) {
+        'taken'      => const Color(0xFF2BC8A7),
+        'taken_late' => const Color(0xFFFFA726),
+        'skipped'    => const Color(0xFFEF5350),
+        _            => const Color(0xFF3B71FE),
+      };
+
+  String get _statusLabel => switch (_localStatus) {
+        'taken'      => 'Taken ✓',
+        'taken_late' => 'Taken Late',
+        'skipped'    => 'Skipped',
+        _            => 'Mark as',
+      };
+
+  Future<void> _handleStatusChange(BuildContext ctx, String? newStatus) async {
     if (_saving) return;
-    setState(() {
-      _saving = true;
-      _localStatus = newStatus;
-    });
+    setState(() { _saving = true; _localStatus = newStatus; });
     try {
       await widget.onStatusChanged(newStatus);
     } catch (e) {
       setState(() => _localStatus = widget.status);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+      if (ctx.mounted) {
+        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
             content: Text('Could not save: $e'),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
+            backgroundColor: Colors.redAccent));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  // FIX 3 + 4: isScrollControlled removes the overflow; explicit colors fix
-  // the light-text issue inside the sheet.
-  void _showActionSheet(BuildContext context) {
-    final theme = Theme.of(context);
-    final sheetBg = theme.colorScheme.surface;
-    final onSurface = theme.colorScheme.onSurface;
-    // Extra bottom padding = system nav-bar height so nothing is clipped
-    final bottomPad = MediaQuery.viewInsetsOf(context).bottom +
-        MediaQuery.paddingOf(context).bottom +
-        16;
+  void _showActionSheet(BuildContext context) async {
+    await _refreshStage();
+    if (!context.mounted) return;
+
+    final theme      = Theme.of(context);
+    final sheetBg    = theme.colorScheme.surface;
+    final onSurface  = theme.colorScheme.onSurface;
+    final bottomPad  = MediaQuery.viewInsetsOf(context).bottom +
+        MediaQuery.paddingOf(context).bottom + 16;
+
+    final takenActive     = _takenActive;
+    final takenLateActive = _takenLateActive;
+    final showSkippedInfo = _showSkippedInfo;
+    final showBanner      = showSkippedInfo || _alertStage == 1;
 
     showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      // isScrollControlled lets the sheet be exactly as tall as its content
-      // without Flutter forcing a minimum height that causes overflow
+      context:            context,
+      backgroundColor:    Colors.transparent,
       isScrollControlled: true,
-      builder: (sheetContext) => Container(
+      builder: (sheetCtx) => Container(
         decoration: BoxDecoration(
           color: sheetBg,
-          borderRadius:
-              const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
         ),
         padding: EdgeInsets.fromLTRB(20, 16, 20, bottomPad),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Drag handle
             Center(
               child: Container(
-                width: 36,
-                height: 4,
+                width: 36, height: 4,
                 decoration: BoxDecoration(
-                  color: onSurface.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(2),
-                ),
+                    color: onSurface.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(2)),
               ),
             ),
             const SizedBox(height: 16),
-            // FIX 4: explicit onSurface color so name is readable in all modes
-            Text(
-              med.name,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: onSurface,
-              ),
-            ),
+            Text(med.name,
+                style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: onSurface)),
             Text(
               '${med.dose} ${med.unit}  ·  '
               '${med.hour.toString().padLeft(2, '0')}:'
               '${med.minute.toString().padLeft(2, '0')} ${med.period}',
-              style: TextStyle(
-                  fontSize: 13, color: onSurface.withOpacity(0.5)),
+              style: TextStyle(fontSize: 13, color: onSurface.withOpacity(0.5)),
             ),
-            const SizedBox(height: 20),
+            if (showBanner) ...[
+              const SizedBox(height: 12),
+              _ContextBanner(
+                isExpired:  showSkippedInfo,
+                alertStage: _alertStage,
+                onSurface:  onSurface,
+              ),
+            ],
+            const SizedBox(height: 16),
             _ActionTile(
-              icon: Icons.check_circle_outline,
-              color: const Color(0xFF2BC8A7),
-              label: 'Taken',
+              icon:     Icons.check_circle_outline,
+              color:    const Color(0xFF2BC8A7),
+              label:    'Taken',
               subtitle: 'I took it on time',
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _handleStatusChange(context, 'taken');
-              },
+              enabled:  takenActive,
+              onTap: takenActive
+                  ? () { Navigator.pop(sheetCtx); _handleStatusChange(context, 'taken'); }
+                  : null,
             ),
             _ActionTile(
-              icon: Icons.watch_later_outlined,
-              color: const Color(0xFFFFA726),
-              label: 'Taken Late',
+              icon:     Icons.watch_later_outlined,
+              color:    const Color(0xFFFFA726),
+              label:    'Taken Late',
               subtitle: 'I took it, but late',
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _handleStatusChange(context, 'taken_late');
-              },
+              enabled:  takenLateActive,
+              onTap: takenLateActive
+                  ? () { Navigator.pop(sheetCtx); _handleStatusChange(context, 'taken_late'); }
+                  : null,
             ),
-            _ActionTile(
-              icon: Icons.snooze_outlined,
-              color: const Color(0xFF9E9E9E),
-              label: 'Snoozed',
-              subtitle: 'Remind me later',
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _handleStatusChange(context, 'snoozed');
-              },
-            ),
-            _ActionTile(
-              icon: Icons.cancel_outlined,
-              color: const Color(0xFFEF5350),
-              label: 'Skipped',
-              subtitle: 'I did not take it',
-              onTap: () {
-                Navigator.pop(sheetContext);
-                _handleStatusChange(context, 'skipped');
-              },
-            ),
-            if (_localStatus != null)
+            if (showSkippedInfo)
+              _SkippedInfoRow(onSurface: onSurface)
+            else
               _ActionTile(
-                icon: Icons.undo_outlined,
-                color: onSurface.withOpacity(0.4),
-                label: 'Undo',
+                icon:     Icons.cancel_outlined,
+                color:    const Color(0xFFEF5350),
+                label:    'Skipped',
+                subtitle: 'I did not take it',
+                enabled:  false,
+                onTap:    null,
+              ),
+            // Undo only for taken/taken_late — not for auto-skipped records.
+            if (_localStatus == 'taken' || _localStatus == 'taken_late')
+              _ActionTile(
+                icon:     Icons.undo_outlined,
+                color:    onSurface.withOpacity(0.4),
+                label:    'Undo',
                 subtitle: 'Clear this record',
-                onTap: () {
-                  Navigator.pop(sheetContext);
-                  _handleStatusChange(context, null);
-                },
+                enabled:  true,
+                onTap: () { Navigator.pop(sheetCtx); _handleStatusChange(context, null); },
               ),
           ],
         ),
@@ -588,13 +635,12 @@ class _MedCardState extends State<_MedCard> {
 
   @override
   Widget build(BuildContext context) {
-    final acc = context.watch<AccessibilityProvider>();
-    final theme = Theme.of(context);
-    final surface = theme.colorScheme.surface;
+    final acc       = context.watch<AccessibilityProvider>();
+    final theme     = Theme.of(context);
+    final surface   = theme.colorScheme.surface;
     final onSurface = theme.colorScheme.onSurface;
-    // FIX 2: scale the status-pill vertical padding by buttonScaleFactor
-    final btnV = 8.0 * acc.buttonScaleFactor;
-    final btnH = 12.0 * acc.buttonScaleFactor;
+    final btnV      = 8.0  * acc.buttonScaleFactor;
+    final btnH      = 12.0 * acc.buttonScaleFactor;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -603,108 +649,155 @@ class _MedCardState extends State<_MedCard> {
         color: surface,
         borderRadius: BorderRadius.circular(16),
         border: _localStatus != null
-            ? Border.all(
-                color: _statusColor.withOpacity(0.4), width: 1.5)
-            : null,
+            ? Border.all(color: _statusColor.withOpacity(0.4), width: 1.5)
+            : _windowExpired
+                ? Border.all(
+                    color: const Color(0xFFEF5350).withOpacity(0.2), width: 1)
+                : null,
       ),
-      child: Row(
-        children: [
-          // Time column
-          SizedBox(
-            width: 52,
-            child: Column(
-              children: [
-                Text(
-                  '${med.hour.toString().padLeft(2, '0')}:'
-                  '${med.minute.toString().padLeft(2, '0')}',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: onSurface,
+      child: Opacity(
+        opacity: (_windowExpired && _localStatus == null) ? 0.75 : 1.0,
+        child: Row(
+          children: [
+            SizedBox(
+              width: 52,
+              child: Column(
+                children: [
+                  Text(
+                    '${med.hour.toString().padLeft(2, '0')}:'
+                    '${med.minute.toString().padLeft(2, '0')}',
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: onSurface),
                   ),
-                ),
-                Text(
-                  med.period,
-                  style: TextStyle(
-                      fontSize: 12, color: onSurface.withOpacity(0.45)),
-                ),
-              ],
+                  Text(med.period,
+                      style: TextStyle(
+                          fontSize: 12, color: onSurface.withOpacity(0.45))),
+                ],
+              ),
             ),
-          ),
-
-          Container(
-            width: 1,
-            height: 48,
-            color: onSurface.withOpacity(0.08),
-            margin: const EdgeInsets.symmetric(horizontal: 12),
-          ),
-
-          // Med info
-          Expanded(
-            child: Row(
-              children: [
-                if (med.imageUrl != null && med.imageUrl!.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: _buildMedImage(med.imageUrl!),
+            Container(
+              width: 1, height: 48,
+              color: onSurface.withOpacity(0.08),
+              margin: const EdgeInsets.symmetric(horizontal: 12),
+            ),
+            Expanded(
+              child: Row(
+                children: [
+                  if (med.imageUrl != null && med.imageUrl!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 10),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: _buildMedImage(med.imageUrl!),
+                      ),
+                    ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(med.name,
+                            style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: onSurface)),
+                        const SizedBox(height: 4),
+                        Text('${med.dose} ${med.unit}  ·  ${med.type}',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: onSurface.withOpacity(0.45))),
+                      ],
                     ),
                   ),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        med.name,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.bold,
-                          color: onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${med.dose} ${med.unit}  ·  ${med.type}',
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: _saving ? null : () => _showActionSheet(context),
+              child: Container(
+                padding: EdgeInsets.symmetric(horizontal: btnH, vertical: btnV),
+                decoration: BoxDecoration(
+                  color: _statusColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: _saving
+                    ? SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: _statusColor))
+                    : Text(_statusLabel,
                         style: TextStyle(
                             fontSize: 12,
-                            color: onSurface.withOpacity(0.45)),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Status / Mark-as button — FIX 2: scaled padding
-          GestureDetector(
-            onTap: _saving ? null : () => _showActionSheet(context),
-            child: Container(
-              padding:
-                  EdgeInsets.symmetric(horizontal: btnH, vertical: btnV),
-              decoration: BoxDecoration(
-                color: _statusColor.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(20),
+                            fontWeight: FontWeight.w700,
+                            color: _statusColor)),
               ),
-              child: _saving
-                  ? SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: _statusColor,
-                      ),
-                    )
-                  : Text(
-                      _statusLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: _statusColor,
-                      ),
-                    ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Widget _buildMedImage(String imageUrl) {
+    if (imageUrl.startsWith('data:')) {
+      try {
+        final b64 = imageUrl.contains(',') ? imageUrl.split(',').last : imageUrl;
+        return Image.memory(base64Decode(b64),
+            width: 40, height: 40, fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox.shrink());
+      } catch (_) {}
+    }
+    return const SizedBox.shrink();
+  }
+}
+
+// ── Context banner ────────────────────────────────────────────────────────────
+
+class _ContextBanner extends StatelessWidget {
+  final bool  isExpired;
+  final int   alertStage;
+  final Color onSurface;
+  const _ContextBanner(
+      {required this.isExpired,
+      required this.alertStage,
+      required this.onSurface});
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, color, text) = isExpired
+        ? (
+            Icons.warning_amber_rounded,
+            const Color(0xFFEF5350),
+            'The intake window for this dose has closed.\n'
+                'It has been recorded as Skipped. '
+                'You may still mark it as "Taken Late".',
+          )
+        : (
+            Icons.access_time_outlined,
+            const Color(0xFFFFA726),
+            'Follow-up reminder sent (+10 min).\n'
+                'Only "Taken Late" is available now.',
+          );
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: onSurface.withOpacity(0.75),
+                    height: 1.4)),
           ),
         ],
       ),
@@ -712,49 +805,76 @@ class _MedCardState extends State<_MedCard> {
   }
 }
 
-// ── Action tile (inside bottom sheet) ────────────────────────────────────────
+// ── Skipped info row ──────────────────────────────────────────────────────────
+
+class _SkippedInfoRow extends StatelessWidget {
+  final Color onSurface;
+  const _SkippedInfoRow({required this.onSurface});
+
+  @override
+  Widget build(BuildContext context) {
+    const color = Color(0xFFEF5350);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: CircleAvatar(
+          backgroundColor: color.withOpacity(0.12),
+          child: const Icon(Icons.cancel_outlined, color: color, size: 22),
+        ),
+        title: Text('Skipped (auto-recorded)',
+            style: TextStyle(
+                fontWeight: FontWeight.w600,
+                fontSize: 15,
+                color: onSurface.withOpacity(0.4))),
+        subtitle: Text('Recorded after the intake window closed',
+            style: TextStyle(
+                fontSize: 12, color: onSurface.withOpacity(0.3))),
+      ),
+    );
+  }
+}
+
+// ── Action tile ───────────────────────────────────────────────────────────────
 
 class _ActionTile extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String label;
-  final String subtitle;
-  final VoidCallback onTap;
+  final IconData      icon;
+  final Color         color;
+  final String        label;
+  final String        subtitle;
+  final bool          enabled;
+  final VoidCallback? onTap;
 
   const _ActionTile({
     required this.icon,
     required this.color,
     required this.label,
     required this.subtitle,
+    required this.enabled,
     required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    // FIX 4: use Theme colors so text is readable in dark/HC modes
-    final onSurface = Theme.of(context).colorScheme.onSurface;
+    final onSurface      = Theme.of(context).colorScheme.onSurface;
+    final effectiveColor = enabled ? color : onSurface.withOpacity(0.25);
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: CircleAvatar(
-        backgroundColor: color.withOpacity(0.12),
-        child: Icon(icon, color: color, size: 22),
+        backgroundColor: effectiveColor.withOpacity(0.12),
+        child: Icon(icon, color: effectiveColor, size: 22),
       ),
-      // Explicit dark colors — no more invisible text
-      title: Text(
-        label,
-        style: TextStyle(
-          fontWeight: FontWeight.w600,
-          fontSize: 15,
-          color: onSurface,
-        ),
-      ),
-      subtitle: Text(
-        subtitle,
-        style: TextStyle(
-          fontSize: 12,
-          color: onSurface.withOpacity(0.5),
-        ),
-      ),
+      title: Text(label,
+          style: TextStyle(
+              fontWeight: FontWeight.w600,
+              fontSize: 15,
+              color: enabled ? onSurface : onSurface.withOpacity(0.3))),
+      subtitle: Text(subtitle,
+          style: TextStyle(
+              fontSize: 12,
+              color: enabled
+                  ? onSurface.withOpacity(0.5)
+                  : onSurface.withOpacity(0.25))),
       onTap: onTap,
     );
   }
@@ -775,34 +895,30 @@ class _PatientSettingsTab extends StatelessWidget {
         content: const Text('Are you sure you want to sign out?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Sign Out',
-                style: TextStyle(color: Colors.red)),
-          ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child:
+                  const Text('Sign Out', style: TextStyle(color: Colors.red))),
         ],
       ),
     );
     if (confirmed != true) return;
     await AuthService().signOut();
     if (!context.mounted) return;
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
+    Navigator.pushAndRemoveUntil(context,
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    final theme = Theme.of(context);
-    final surface = theme.colorScheme.surface;
+    final user      = FirebaseAuth.instance.currentUser;
+    final theme     = Theme.of(context);
+    final surface   = theme.colorScheme.surface;
     final onSurface = theme.colorScheme.onSurface;
-    final primary = theme.colorScheme.primary;
+    final primary   = theme.colorScheme.primary;
 
     return SafeArea(
       child: Padding(
@@ -810,16 +926,12 @@ class _PatientSettingsTab extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Settings',
-              style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: onSurface),
-            ),
+            Text('Settings',
+                style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: onSurface)),
             const SizedBox(height: 24),
-
-            // Profile card
             StreamBuilder<Map<String, dynamic>?>(
               stream: ProfileService().profileStream(),
               builder: (context, snap) {
@@ -831,74 +943,50 @@ class _PatientSettingsTab extends StatelessWidget {
                 final profileImageUrl =
                     profileData?['profileImageUrl'] as String?;
 
-                Widget avatarWidget;
+                Widget avatar;
                 if (profileImageUrl != null &&
                     profileImageUrl.startsWith('data:')) {
                   try {
                     final b64 = profileImageUrl.contains(',')
                         ? profileImageUrl.split(',').last
                         : profileImageUrl;
-                    avatarWidget = CircleAvatar(
-                      radius: 28,
-                      backgroundImage: MemoryImage(base64Decode(b64)),
-                    );
+                    avatar = CircleAvatar(
+                        radius: 28,
+                        backgroundImage: MemoryImage(base64Decode(b64)));
                   } catch (_) {
-                    avatarWidget = CircleAvatar(
-                      radius: 28,
-                      backgroundColor: primary,
-                      child: const Icon(Icons.person_outline,
-                          color: Colors.white, size: 28),
-                    );
+                    avatar = _defaultAvatar(displayName, primary);
                   }
                 } else {
-                  avatarWidget = CircleAvatar(
-                    radius: 28,
-                    backgroundColor: primary,
-                    child: Text(
-                      displayName.isNotEmpty
-                          ? displayName[0].toUpperCase()
-                          : 'P',
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20),
-                    ),
-                  );
+                  avatar = _defaultAvatar(displayName, primary);
                 }
 
                 return GestureDetector(
                   onTap: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const ProfileSettingsScreen()),
-                  ),
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => const ProfileSettingsScreen())),
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: surface,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                        color: surface,
+                        borderRadius: BorderRadius.circular(16)),
                     child: Row(
                       children: [
-                        avatarWidget,
+                        avatar,
                         const SizedBox(width: 14),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                displayName,
-                                style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.bold,
-                                    color: onSurface),
-                              ),
-                              Text(
-                                user?.email ?? '',
-                                style: TextStyle(
-                                    fontSize: 13,
-                                    color: onSurface.withOpacity(0.45)),
-                              ),
+                              Text(displayName,
+                                  style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: onSurface)),
+                              Text(user?.email ?? '',
+                                  style: TextStyle(
+                                      fontSize: 13,
+                                      color: onSurface.withOpacity(0.45))),
                             ],
                           ),
                         ),
@@ -906,16 +994,13 @@ class _PatientSettingsTab extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            color: primary.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            'Patient',
-                            style: TextStyle(
-                                fontSize: 12,
-                                color: primary,
-                                fontWeight: FontWeight.w700),
-                          ),
+                              color: primary.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(20)),
+                          child: Text('Patient',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: primary,
+                                  fontWeight: FontWeight.w700)),
                         ),
                         const SizedBox(width: 8),
                         Icon(Icons.edit_outlined,
@@ -927,104 +1012,89 @@ class _PatientSettingsTab extends StatelessWidget {
                 );
               },
             ),
-
             const SizedBox(height: 16),
-
-            // Edit profile
             _SettingsTile(
-              icon: Icons.edit_outlined,
-              label: 'Edit Profile',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const ProfileSettingsScreen()),
-              ),
-            ),
-
+                icon: Icons.edit_outlined,
+                label: 'Edit Profile',
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ProfileSettingsScreen()))),
             const SizedBox(height: 12),
-
-            // Accessibility
             _SettingsTile(
-              icon: Icons.accessibility_new_rounded,
-              label: 'Accessibility',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const AccessibilitySettingsScreen()),
-              ),
-            ),
-
+                icon: Icons.accessibility_new_rounded,
+                label: 'Accessibility',
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            const AccessibilitySettingsScreen()))),
             const SizedBox(height: 12),
-
-            // Notifications
             _SettingsTile(
-              icon: Icons.notifications_outlined,
-              label: 'Notification Settings',
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute(
-                    builder: (_) => const NotificationSettingsScreen()),
-              ),
-            ),
-
+                icon: Icons.notifications_outlined,
+                label: 'Notification Settings',
+                onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) =>
+                            const NotificationSettingsScreen()))),
             const SizedBox(height: 12),
-
-            // Sign out
             _SettingsTile(
-              icon: Icons.logout,
-              label: 'Sign Out',
-              color: Colors.red,
-              onTap: () => _signOut(context),
-            ),
+                icon: Icons.logout,
+                label: 'Sign Out',
+                color: Colors.red,
+                onTap: () => _signOut(context)),
           ],
         ),
       ),
     );
   }
+
+  Widget _defaultAvatar(String name, Color primary) => CircleAvatar(
+        radius: 28,
+        backgroundColor: primary,
+        child: Text(name.isNotEmpty ? name[0].toUpperCase() : 'P',
+            style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 20)),
+      );
 }
 
 class _SettingsTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color? color;
+  final IconData     icon;
+  final String       label;
+  final Color?       color;
   final VoidCallback onTap;
 
-  const _SettingsTile({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.color,
-  });
+  const _SettingsTile(
+      {required this.icon,
+      required this.label,
+      required this.onTap,
+      this.color});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final theme   = Theme.of(context);
     final surface = theme.colorScheme.surface;
-    final defaultColor = theme.colorScheme.onSurface;
-    final c = color ?? defaultColor;
+    final c       = color ?? theme.colorScheme.onSurface;
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: surface,
-          borderRadius: BorderRadius.circular(16),
-        ),
+            color: surface, borderRadius: BorderRadius.circular(16)),
         child: Row(
           children: [
             Icon(icon, color: c, size: 22),
             const SizedBox(width: 14),
             Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: c,
-                ),
-              ),
-            ),
+                child: Text(label,
+                    style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: c))),
             Icon(Icons.chevron_right, color: c.withOpacity(0.5)),
           ],
         ),

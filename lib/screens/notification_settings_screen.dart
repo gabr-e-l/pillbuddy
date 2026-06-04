@@ -4,15 +4,18 @@
 //
 // Patient side:
 //   • Toggle all medication reminders on / off
-//   • Explains the three-alert flow (first reminder → snooze → final/missed)
+//   • Explains the three-stage alarm flow (matching patient_home.dart behaviour)
+//     Stage 0 — First Reminder  → only "Taken" is active
+//     Stage 1 — Follow-up (+10 min) → only "Taken Late" is active
+//     Stage 2 — Final Alert (+20 min) → dose auto-recorded as Skipped;
+//                                        "Taken Late" still available to correct
 //
 // Caregiver side:
 //   • Toggle intake-update notifications on / off
-//   • Explains that they get notified when a patient marks taken / missed
+//   • Explains that they get notified for Taken / Taken Late / Missed
 //
-// UPDATED: Wraps content in the correct accessibility theme so that dark/HC
-// mode, font scale, and button scale from AccessibilityProvider (patient) or
-// CaregiverAccessibilityProvider (caregiver) are applied automatically.
+// UPDATED: "Snoozed" removed throughout. Step descriptions updated to reflect
+// the stage-aware Mark-As sheet in patient_home.dart.
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -21,7 +24,6 @@ import '../providers/caregiver_accessibility_provider.dart';
 import '../services/notification_service.dart';
 
 class NotificationSettingsScreen extends StatefulWidget {
-  /// Pass true when opened from the caregiver side.
   final bool isCaregiverMode;
 
   const NotificationSettingsScreen({
@@ -51,23 +53,14 @@ class _NotificationSettingsScreenState
     final enabled = widget.isCaregiverMode
         ? await _svc.isCaregiverEnabled()
         : await _svc.isPatientEnabled();
-    if (mounted) {
-      setState(() {
-        _enabled = enabled;
-        _loading = false;
-      });
-    }
+    if (mounted) setState(() { _enabled = enabled; _loading = false; });
   }
 
   Future<void> _toggle(bool value) async {
     if (value) {
       final granted = await _svc.requestPermission();
-      if (!granted && mounted) {
-        _showPermissionDenied();
-        return;
-      }
+      if (!granted && mounted) { _showPermissionDenied(); return; }
     }
-
     if (widget.isCaregiverMode) {
       await _svc.setCaregiverEnabled(value);
     } else {
@@ -80,8 +73,7 @@ class _NotificationSettingsScreenState
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Permission Required'),
         content: const Text(
           'Notification permission was denied. '
@@ -101,53 +93,44 @@ class _NotificationSettingsScreenState
 
   @override
   Widget build(BuildContext context) {
-    if (widget.isCaregiverMode) {
-      return _buildWithCaregiverTheme();
-    } else {
-      return _buildWithPatientTheme();
-    }
+    return widget.isCaregiverMode
+        ? _buildWithCaregiverTheme()
+        : _buildWithPatientTheme();
   }
 
   Widget _buildWithPatientTheme() {
-    final acc = context.watch<AccessibilityProvider>();
+    final acc  = context.watch<AccessibilityProvider>();
     final isDark = acc.themeMode == AppThemeMode.dark;
-    final theme = isDark ? acc.buildDarkTheme() : acc.buildLightTheme();
-    final mq = MediaQuery.of(context)
+    final theme  = isDark ? acc.buildDarkTheme() : acc.buildLightTheme();
+    final mq     = MediaQuery.of(context)
         .copyWith(textScaler: TextScaler.linear(acc.fontScaleFactor));
 
     return Theme(
       data: theme,
-      child: MediaQuery(
-        data: mq,
-        child: Builder(builder: (ctx) => _buildContent(ctx)),
-      ),
+      child: MediaQuery(data: mq,
+          child: Builder(builder: (ctx) => _buildContent(ctx))),
     );
   }
 
   Widget _buildWithCaregiverTheme() {
     final acc = context.watch<CaregiverAccessibilityProvider>();
-    final mq = MediaQuery.of(context)
+    final mq  = MediaQuery.of(context)
         .copyWith(textScaler: TextScaler.linear(acc.fontScaleFactor));
 
     return Theme(
       data: acc.theme,
-      child: MediaQuery(
-        data: mq,
-        child: Builder(builder: (ctx) => _buildContent(ctx)),
-      ),
+      child: MediaQuery(data: mq,
+          child: Builder(builder: (ctx) => _buildContent(ctx))),
     );
   }
 
   Widget _buildContent(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor =
-        isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
+    final cs        = Theme.of(context).colorScheme;
+    final isDark    = Theme.of(context).brightness == Brightness.dark;
+    final bgColor   = isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
     final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final onSurface = cs.onSurface;
-
-    // Accent: caregiver teal vs patient primary
-    final accent = widget.isCaregiverMode ? const Color(0xFF2BC8A7) : cs.primary;
+    final accent    = widget.isCaregiverMode ? const Color(0xFF2BC8A7) : cs.primary;
 
     return Scaffold(
       backgroundColor: bgColor,
@@ -161,10 +144,7 @@ class _NotificationSettingsScreenState
         title: Text(
           'Notification Settings',
           style: TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-            color: onSurface,
-          ),
+              fontSize: 18, fontWeight: FontWeight.bold, color: onSurface),
         ),
         centerTitle: true,
       ),
@@ -180,8 +160,7 @@ class _NotificationSettingsScreenState
                   child: Row(
                     children: [
                       Container(
-                        width: 44,
-                        height: 44,
+                        width: 44, height: 44,
                         decoration: BoxDecoration(
                           color: accent.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
@@ -190,8 +169,7 @@ class _NotificationSettingsScreenState
                           widget.isCaregiverMode
                               ? Icons.notifications_active_outlined
                               : Icons.medication_outlined,
-                          color: accent,
-                          size: 24,
+                          color: accent, size: 24,
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -204,20 +182,18 @@ class _NotificationSettingsScreenState
                                   ? 'Patient Intake Alerts'
                                   : 'Medication Reminders',
                               style: TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: onSurface,
-                              ),
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold,
+                                  color: onSurface),
                             ),
                             const SizedBox(height: 2),
                             Text(
                               widget.isCaregiverMode
                                   ? 'Get notified when a patient takes or misses a dose'
-                                  : 'Receive reminders for each scheduled dose',
+                                  : 'Receive alarms for each scheduled dose',
                               style: TextStyle(
-                                fontSize: 12,
-                                color: onSurface.withValues(alpha: 0.5),
-                              ),
+                                  fontSize: 12,
+                                  color: onSurface.withValues(alpha: 0.5)),
                             ),
                           ],
                         ),
@@ -257,14 +233,54 @@ class _NotificationSettingsScreenState
 
                 const SizedBox(height: 20),
 
+                // ── DND bypass note (patient only) ───────────────────────
+                if (!widget.isCaregiverMode) ...[
+                  _SectionCard(
+                    cardColor: cardColor,
+                    isDark: isDark,
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.do_not_disturb_off_outlined,
+                            color: accent, size: 20),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Bypasses Do Not Disturb',
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: onSurface),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'Medication alarms will ring even when your '
+                                'phone is set to Do Not Disturb, ensuring you '
+                                "never miss a dose.",
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: onSurface.withValues(alpha: 0.55),
+                                    height: 1.4),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
+
                 // ── Info banner ──────────────────────────────────────────
                 Container(
                   padding: const EdgeInsets.all(14),
                   decoration: BoxDecoration(
                     color: accent.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                        color: accent.withValues(alpha: 0.2)),
+                    border: Border.all(color: accent.withValues(alpha: 0.2)),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -274,17 +290,14 @@ class _NotificationSettingsScreenState
                       Expanded(
                         child: Text(
                           widget.isCaregiverMode
-                              ? 'Notifications appear when you have the app installed '
-                                'and are signed in. No internet connection is required '
-                                'to receive them — they are delivered locally on your device.'
-                              : 'Notifications are delivered locally on your device. '
-                                'Make sure the app is installed and notification '
-                                'permission is granted for reminders to work.',
+                              ? 'Notifications appear when you have the app '
+                                'installed and are signed in. They are delivered '
+                                'locally on your device.'
+                              : 'Alarms are delivered locally on your device. '
+                                'Make sure notification permission is granted '
+                                'and the app is installed.',
                           style: TextStyle(
-                            fontSize: 12,
-                            color: accent,
-                            height: 1.5,
-                          ),
+                              fontSize: 12, color: accent, height: 1.5),
                         ),
                       ),
                     ],
@@ -300,26 +313,26 @@ class _NotificationSettingsScreenState
   List<Widget> _patientSteps(Color onSurface) {
     final steps = [
       _StepData(
-        icon: Icons.notifications_outlined,
-        color: const Color(0xFF1A6BFF),
-        title: 'First Reminder',
-        subtitle:
-            'Sent at the scheduled intake time with medicine name, dosage, and time.',
+        icon:     Icons.notifications_outlined,
+        color:    const Color(0xFF1A6BFF),
+        title:    'First Alarm (scheduled time)',
+        subtitle: 'Alarm sounds with medicine name, dosage, and time. '
+            'Only "Taken" is available to mark.',
       ),
       _StepData(
-        icon: Icons.snooze_outlined,
-        color: const Color(0xFFFFA726),
-        title: 'Snooze Alert (10 min later)',
-        subtitle:
-            "A follow-up reminder if the dose hasn't been marked yet.",
+        icon:     Icons.access_time_outlined,
+        color:    const Color(0xFFFFA726),
+        title:    'Follow-Up Alarm (+10 min)',
+        subtitle: 'A second alarm fires if the dose is still unmarked. '
+            'Only "Taken Late" is available to mark.',
       ),
       _StepData(
-        icon: Icons.warning_amber_rounded,
-        color: const Color(0xFFEF5350),
-        title: 'Final Alert (20 min later)',
-        subtitle:
-            'Last warning before the dose is automatically recorded as a Missed Dose with a timestamp.',
-        isLast: true,
+        icon:     Icons.warning_amber_rounded,
+        color:    const Color(0xFFEF5350),
+        title:    'Final Alarm (+20 min)',
+        subtitle: 'Dose is automatically recorded as Skipped. '
+            'You may still correct it to "Taken Late" later that day.',
+        isLast:   true,
       ),
     ];
     return steps.map((s) => _StepRow(data: s, onSurface: onSurface)).toList();
@@ -328,40 +341,40 @@ class _NotificationSettingsScreenState
   List<Widget> _caregiverSteps(Color onSurface) {
     final steps = [
       _StepData(
-        icon: Icons.check_circle_outline,
-        color: const Color(0xFF2BC8A7),
-        title: 'Dose Taken',
-        subtitle:
-            'You receive a notification when a patient marks a dose as Taken or Taken Late.',
+        icon:     Icons.check_circle_outline,
+        color:    const Color(0xFF2BC8A7),
+        title:    'Dose Taken / Taken Late',
+        subtitle: 'You receive a notification when a patient marks a '
+            'dose as Taken or Taken Late.',
       ),
       _StepData(
-        icon: Icons.cancel_outlined,
-        color: const Color(0xFFEF5350),
-        title: 'Dose Missed',
-        subtitle:
-            'You are alerted when a dose is recorded as Skipped or auto-marked as Missed.',
+        icon:     Icons.cancel_outlined,
+        color:    const Color(0xFFEF5350),
+        title:    'Dose Missed',
+        subtitle: 'You are alerted when a dose is recorded as Skipped '
+            'or automatically marked as Missed after the final alarm.',
       ),
       _StepData(
-        icon: Icons.history_rounded,
-        color: const Color(0xFF3B71FE),
-        title: 'Aligned with Intake Updates',
-        subtitle:
-            'Every alert matches the Intake Updates timeline — both include a timestamp.',
-        isLast: true,
+        icon:     Icons.history_rounded,
+        color:    const Color(0xFF3B71FE),
+        title:    'Aligned with Intake Updates',
+        subtitle: 'Every alert matches the Intake Updates timeline — '
+            'both include a timestamp.',
+        isLast:   true,
       ),
     ];
     return steps.map((s) => _StepRow(data: s, onSurface: onSurface)).toList();
   }
 }
 
-// ── Helper widgets ──────────────────────────────────────────────────────────
+// ── Helper widgets ─────────────────────────────────────────────────────────────
 
 class _StepData {
   final IconData icon;
-  final Color color;
-  final String title;
-  final String subtitle;
-  final bool isLast;
+  final Color    color;
+  final String   title;
+  final String   subtitle;
+  final bool     isLast;
 
   const _StepData({
     required this.icon,
@@ -374,8 +387,7 @@ class _StepData {
 
 class _StepRow extends StatelessWidget {
   final _StepData data;
-  final Color onSurface;
-
+  final Color     onSurface;
   const _StepRow({required this.data, required this.onSurface});
 
   @override
@@ -388,8 +400,7 @@ class _StepRow extends StatelessWidget {
           Column(
             children: [
               Container(
-                width: 36,
-                height: 36,
+                width: 36, height: 36,
                 decoration: BoxDecoration(
                   color: data.color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
@@ -398,8 +409,7 @@ class _StepRow extends StatelessWidget {
               ),
               if (!data.isLast)
                 Container(
-                  width: 2,
-                  height: 28,
+                  width: 2, height: 28,
                   color: data.color.withValues(alpha: 0.2),
                   margin: const EdgeInsets.symmetric(vertical: 4),
                 ),
@@ -412,22 +422,17 @@ class _StepRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    data.title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: onSurface,
-                    ),
-                  ),
+                  Text(data.title,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: onSurface)),
                   const SizedBox(height: 3),
-                  Text(
-                    data.subtitle,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: onSurface.withValues(alpha: 0.5),
-                        height: 1.4),
-                  ),
+                  Text(data.subtitle,
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: onSurface.withValues(alpha: 0.5),
+                          height: 1.4)),
                 ],
               ),
             ),
@@ -440,8 +445,8 @@ class _StepRow extends StatelessWidget {
 
 class _SectionCard extends StatelessWidget {
   final Widget child;
-  final Color cardColor;
-  final bool isDark;
+  final Color  cardColor;
+  final bool   isDark;
 
   const _SectionCard({
     required this.child,

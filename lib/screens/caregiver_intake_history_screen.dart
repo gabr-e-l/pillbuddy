@@ -1,14 +1,18 @@
 // lib/screens/caregiver_intake_history_screen.dart
 //
-// Intake Updates — caregiver view of a patient's full medication adherence history.
+// Intake Updates — caregiver view of a patient's full medication adherence
+// history.
 //
 // Features:
-//   • Summary bar — total taken / taken-late / snoozed / skipped counts
+//   • Summary bar — total taken / taken-late / skipped counts + adherence rate
 //   • Date filter chips — All | Today | This Week | This Month | Custom range
 //   • Medication filter — filter to one specific medication
 //   • Grouped timeline — entries grouped by date, newest first
 //   • Adherence rate progress bar per group
 //   • Real-time Firestore stream from users/{patientUid}/intakes
+//
+// Status values: 'taken' | 'taken_late' | 'skipped'
+// ('snoozed' has been removed from the app.)
 //
 // UPDATED: All text, colours, cards and buttons respect
 // CaregiverAccessibilityProvider (dark/HC/font/button scale).
@@ -22,10 +26,10 @@ import 'caregiver_theme_wrapper.dart';
 // ── Data model ────────────────────────────────────────────────────────────────
 
 class IntakeRecord {
-  final String medId;
-  final String medName;
-  final String status; // taken | taken_late | snoozed | skipped
-  final String date;   // yyyy-MM-dd
+  final String    medId;
+  final String    medName;
+  final String    status;      // taken | taken_late | skipped
+  final String    date;        // yyyy-MM-dd
   final DateTime? recordedAt;
 
   const IntakeRecord({
@@ -39,10 +43,10 @@ class IntakeRecord {
   factory IntakeRecord.fromDoc(DocumentSnapshot doc) {
     final d = doc.data() as Map<String, dynamic>;
     return IntakeRecord(
-      medId:      d['medId']   as String? ?? '',
-      medName:    d['medName'] as String? ?? 'Unknown',
-      status:     d['status']  as String? ?? 'unknown',
-      date:       d['date']    as String? ?? '',
+      medId:      d['medId']      as String? ?? '',
+      medName:    d['medName']    as String? ?? 'Unknown',
+      status:     d['status']     as String? ?? 'unknown',
+      date:       d['date']       as String? ?? '',
       recordedAt: d['recordedAt'] != null
           ? (d['recordedAt'] as Timestamp).toDate()
           : null,
@@ -103,7 +107,7 @@ class _CaregiverIntakeHistoryScreenState
     extends State<CaregiverIntakeHistoryScreen> {
   final _reader = _CaregiverIntakeReader();
 
-  _DateFilter    _dateFilter     = _DateFilter.all;
+  _DateFilter    _dateFilter    = _DateFilter.all;
   DateTimeRange? _customRange;
   String?        _selectedMedId;
   String?        _selectedMedName;
@@ -111,10 +115,9 @@ class _CaregiverIntakeHistoryScreenState
   // Status palette – fixed, independent of theme
   static const _teal   = Color(0xFF2BC8A7);
   static const _orange = Color(0xFFFFA726);
-  static const _grey   = Color(0xFF9E9E9E);
   static const _red    = Color(0xFFEF5350);
 
-  // ── Filtering ─────────────────────────────────────────────────────────────
+  // ── Filtering ──────────────────────────────────────────────────────────────
 
   bool _inDateRange(IntakeRecord r) {
     if (_dateFilter == _DateFilter.all) return true;
@@ -145,7 +148,8 @@ class _CaregiverIntakeHistoryScreenState
 
     final parts = r.date.split('-');
     if (parts.length != 3) return false;
-    final d    = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+    final d     = DateTime(int.parse(parts[0]), int.parse(parts[1]),
+        int.parse(parts[2]));
     final fromD = DateTime(from!.year, from.month, from.day);
     final toD   = DateTime(to!.year,   to.month,   to.day);
     return !d.isBefore(fromD) && !d.isAfter(toD);
@@ -162,20 +166,22 @@ class _CaregiverIntakeHistoryScreenState
     for (final r in records) {
       map.putIfAbsent(r.date, () => []).add(r);
     }
-    final sorted = map.entries.toList()..sort((a, b) => b.key.compareTo(a.key));
+    final sorted = map.entries.toList()
+      ..sort((a, b) => b.key.compareTo(a.key));
     return Map.fromEntries(sorted);
   }
 
-  // ── Pickers ───────────────────────────────────────────────────────────────
+  // ── Pickers ────────────────────────────────────────────────────────────────
 
   Future<void> _pickCustomRange() async {
-    final now = DateTime.now();
+    final now   = DateTime.now();
     final range = await showDateRangePicker(
       context: context,
       firstDate: DateTime(now.year - 2),
-      lastDate: now,
+      lastDate:  now,
       initialDateRange: _customRange ??
-          DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now),
+          DateTimeRange(
+              start: now.subtract(const Duration(days: 7)), end: now),
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx)
             .copyWith(colorScheme: const ColorScheme.light(primary: _teal)),
@@ -191,16 +197,14 @@ class _CaregiverIntakeHistoryScreenState
   }
 
   void _showMedFilter(List<IntakeRecord> all) {
-    final meds = <String, String>{};
-    for (final r in all) {
-      meds[r.medId] = r.medName;
-    }
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final meds    = <String, String>{};
+    for (final r in all) { meds[r.medId] = r.medName; }
+    final isDark  = Theme.of(context).brightness == Brightness.dark;
     final sheetBg = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final onSheet = isDark ? Colors.white : Colors.black87;
 
     showModalBottomSheet(
-      context: context,
+      context:  context,
       backgroundColor: sheetBg,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
@@ -230,23 +234,20 @@ class _CaregiverIntakeHistoryScreenState
             const SizedBox(height: 8),
             ListTile(
               leading: const Icon(Icons.medication_outlined, color: _teal),
-              title: Text('All Medications',
+              title:   Text('All Medications',
                   style: TextStyle(color: onSheet)),
               trailing: _selectedMedId == null
                   ? const Icon(Icons.check, color: _teal)
                   : null,
               onTap: () {
-                setState(() {
-                  _selectedMedId   = null;
-                  _selectedMedName = null;
-                });
+                setState(() { _selectedMedId = null; _selectedMedName = null; });
                 Navigator.pop(ctx);
               },
             ),
             ...meds.entries.map((e) => ListTile(
                   leading: Icon(Icons.medication,
                       color: isDark ? Colors.white54 : Colors.black45),
-                  title: Text(e.value, style: TextStyle(color: onSheet)),
+                  title:   Text(e.value, style: TextStyle(color: onSheet)),
                   trailing: _selectedMedId == e.key
                       ? const Icon(Icons.check, color: _teal)
                       : null,
@@ -271,7 +272,6 @@ class _CaregiverIntakeHistoryScreenState
     switch (status) {
       case 'taken':      return _teal;
       case 'taken_late': return _orange;
-      case 'snoozed':    return _grey;
       case 'skipped':    return _red;
       default:           return Colors.blueGrey;
     }
@@ -281,7 +281,6 @@ class _CaregiverIntakeHistoryScreenState
     switch (status) {
       case 'taken':      return Icons.check_circle_rounded;
       case 'taken_late': return Icons.watch_later_rounded;
-      case 'snoozed':    return Icons.snooze_rounded;
       case 'skipped':    return Icons.cancel_rounded;
       default:           return Icons.help_outline_rounded;
     }
@@ -291,7 +290,6 @@ class _CaregiverIntakeHistoryScreenState
     switch (status) {
       case 'taken':      return 'Taken';
       case 'taken_late': return 'Taken Late';
-      case 'snoozed':    return 'Snoozed';
       case 'skipped':    return 'Skipped';
       default:           return status;
     }
@@ -300,15 +298,18 @@ class _CaregiverIntakeHistoryScreenState
   String _friendlyDate(String dateStr) {
     final parts = dateStr.split('-');
     if (parts.length != 3) return dateStr;
-    final d    = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
-    final now  = DateTime.now();
+    final d     = DateTime(int.parse(parts[0]), int.parse(parts[1]),
+        int.parse(parts[2]));
+    final now   = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final diff  = today.difference(DateTime(d.year, d.month, d.day)).inDays;
+    final diff  = today
+        .difference(DateTime(d.year, d.month, d.day))
+        .inDays;
     if (diff == 0) return 'Today';
     if (diff == 1) return 'Yesterday';
     const months = [
       '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     return '${months[d.month]} ${d.day}, ${d.year}';
   }
@@ -322,10 +323,10 @@ class _CaregiverIntakeHistoryScreenState
     return '$h:$m $p';
   }
 
+  /// Returns counts for the three active statuses only.
   Map<String, int> _counts(List<IntakeRecord> records) => {
         'taken':      records.where((r) => r.status == 'taken').length,
         'taken_late': records.where((r) => r.status == 'taken_late').length,
-        'snoozed':    records.where((r) => r.status == 'snoozed').length,
         'skipped':    records.where((r) => r.status == 'skipped').length,
       };
 
@@ -337,7 +338,7 @@ class _CaregiverIntakeHistoryScreenState
     return taken / records.length;
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -345,7 +346,8 @@ class _CaregiverIntakeHistoryScreenState
       builder: (ctx, acc) {
         final cs      = Theme.of(ctx).colorScheme;
         final isDark  = Theme.of(ctx).brightness == Brightness.dark;
-        final bgColor = isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
+        final bgColor =
+            isDark ? const Color(0xFF121212) : const Color(0xFFF4F7FF);
 
         return Scaffold(
           backgroundColor: bgColor,
@@ -421,7 +423,7 @@ class _CaregiverIntakeHistoryScreenState
     );
   }
 
-  // ── Filter bar ────────────────────────────────────────────────────────────
+  // ── Filter bar ─────────────────────────────────────────────────────────────
 
   Widget _buildFilterBar(
       List<IntakeRecord> all, bool isDark, ColorScheme cs) {
@@ -434,6 +436,7 @@ class _CaregiverIntakeHistoryScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Date filter chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -460,8 +463,10 @@ class _CaregiverIntakeHistoryScreenState
                     ),
                     child: Text(
                       f == _DateFilter.custom && _customRange != null
-                          ? '${_customRange!.start.day}/${_customRange!.start.month}'
-                              ' – ${_customRange!.end.day}/${_customRange!.end.month}'
+                          ? '${_customRange!.start.day}/'
+                              '${_customRange!.start.month}'
+                              ' – ${_customRange!.end.day}/'
+                              '${_customRange!.end.month}'
                           : f.label,
                       style: TextStyle(
                         fontSize: 12,
@@ -489,8 +494,8 @@ class _CaregiverIntakeHistoryScreenState
                     : chipBg,
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color:
-                      _selectedMedId != null ? _teal : chipBorder),
+                    color:
+                        _selectedMedId != null ? _teal : chipBorder),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -526,7 +531,7 @@ class _CaregiverIntakeHistoryScreenState
     );
   }
 
-  // ── Summary card ──────────────────────────────────────────────────────────
+  // ── Summary card ───────────────────────────────────────────────────────────
 
   Widget _buildSummaryCard(Map<String, int> counts, double rate,
       bool isDark, ColorScheme cs) {
@@ -542,7 +547,8 @@ class _CaregiverIntakeHistoryScreenState
         borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
+              color:
+                  Colors.black.withValues(alpha: isDark ? 0.3 : 0.05),
               blurRadius: 8,
               offset: const Offset(0, 3)),
         ],
@@ -550,6 +556,7 @@ class _CaregiverIntakeHistoryScreenState
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Adherence rate row
           Row(
             children: [
               Text('Adherence Rate',
@@ -573,6 +580,7 @@ class _CaregiverIntakeHistoryScreenState
             ],
           ),
           const SizedBox(height: 8),
+          // Progress bar
           ClipRRect(
             borderRadius: BorderRadius.circular(4),
             child: LinearProgressIndicator(
@@ -586,19 +594,17 @@ class _CaregiverIntakeHistoryScreenState
             ),
           ),
           const SizedBox(height: 14),
+          // Three stat chips — Taken / Late / Skipped
           Row(
             children: [
               _statChip(Icons.check_circle_rounded, _teal,
-                  counts['taken']!, 'Taken', isDark),
+                  counts['taken']!,      'Taken',   isDark),
               const SizedBox(width: 8),
               _statChip(Icons.watch_later_rounded, _orange,
-                  counts['taken_late']!, 'Late', isDark),
-              const SizedBox(width: 8),
-              _statChip(Icons.snooze_rounded, _grey,
-                  counts['snoozed']!, 'Snoozed', isDark),
+                  counts['taken_late']!, 'Late',    isDark),
               const SizedBox(width: 8),
               _statChip(Icons.cancel_rounded, _red,
-                  counts['skipped']!, 'Skipped', isDark),
+                  counts['skipped']!,    'Skipped', isDark),
             ],
           ),
         ],
@@ -635,7 +641,7 @@ class _CaregiverIntakeHistoryScreenState
     );
   }
 
-  // ── Day group ─────────────────────────────────────────────────────────────
+  // ── Day group ──────────────────────────────────────────────────────────────
 
   Widget _buildDayGroup(String dateStr, List<IntakeRecord> records,
       bool isDark, ColorScheme cs) {
@@ -705,15 +711,18 @@ class _CaregiverIntakeHistoryScreenState
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
         color: cardColor,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-            color: color.withValues(alpha: isDark ? 0.35 : 0.2), width: 1),
+            color: color.withValues(alpha: isDark ? 0.35 : 0.2),
+            width: 1),
         boxShadow: [
           BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
+              color:
+                  Colors.black.withValues(alpha: isDark ? 0.25 : 0.04),
               blurRadius: 6,
               offset: const Offset(0, 2)),
         ],
@@ -721,8 +730,7 @@ class _CaregiverIntakeHistoryScreenState
       child: Row(
         children: [
           Container(
-            width: 40,
-            height: 40,
+            width: 40, height: 40,
             decoration: BoxDecoration(
               color: color.withValues(alpha: isDark ? 0.18 : 0.1),
               borderRadius: BorderRadius.circular(12),
@@ -741,10 +749,11 @@ class _CaregiverIntakeHistoryScreenState
                         color: nameColor)),
                 const SizedBox(height: 3),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: color.withValues(alpha: isDark ? 0.18 : 0.1),
+                    color: color.withValues(
+                        alpha: isDark ? 0.18 : 0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(label,
