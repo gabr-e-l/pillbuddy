@@ -20,6 +20,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/medication_model.dart';
 import '../providers/caregiver_accessibility_provider.dart';
 import 'caregiver_theme_wrapper.dart';
 
@@ -67,6 +68,18 @@ class _CaregiverIntakeReader {
         .orderBy('recordedAt', descending: true)
         .snapshots()
         .map((snap) => snap.docs.map(IntakeRecord.fromDoc).toList());
+  }
+
+  /// Live stream of the patient's current medications (for the filter list).
+  Stream<List<MedicationModel>> medsStreamForPatient(String patientUid) {
+    return _db
+        .collection('users')
+        .doc(patientUid)
+        .collection('medications')
+        .snapshots()
+        .map((snap) => snap.docs
+          .map((d) => MedicationModel.fromDoc(d))
+          .toList());
   }
 }
 
@@ -196,9 +209,7 @@ class _CaregiverIntakeHistoryScreenState
     }
   }
 
-  void _showMedFilter(List<IntakeRecord> all) {
-    final meds    = <String, String>{};
-    for (final r in all) { meds[r.medId] = r.medName; }
+  void _showMedFilter(List<MedicationModel> meds) {
     final isDark  = Theme.of(context).brightness == Brightness.dark;
     final sheetBg = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final onSheet = isDark ? Colors.white : Colors.black87;
@@ -244,17 +255,19 @@ class _CaregiverIntakeHistoryScreenState
                 Navigator.pop(ctx);
               },
             ),
-            ...meds.entries.map((e) => ListTile(
+            ...meds.map((m) => ListTile(
                   leading: Icon(Icons.medication,
                       color: isDark ? Colors.white54 : Colors.black45),
-                  title:   Text(e.value, style: TextStyle(color: onSheet)),
-                  trailing: _selectedMedId == e.key
+                  title: Text(m.name,
+                      style: TextStyle(color: onSheet),
+                      overflow: TextOverflow.ellipsis),
+                  trailing: _selectedMedId == m.id
                       ? const Icon(Icons.check, color: _teal)
                       : null,
                   onTap: () {
                     setState(() {
-                      _selectedMedId   = e.key;
-                      _selectedMedName = e.value;
+                      _selectedMedId   = m.id;
+                      _selectedMedName = m.name;
                     });
                     Navigator.pop(ctx);
                   },
@@ -377,9 +390,25 @@ class _CaregiverIntakeHistoryScreenState
             ),
             centerTitle: true,
           ),
-          body: StreamBuilder<List<IntakeRecord>>(
-            stream: _reader.streamForPatient(widget.patientUid),
-            builder: (context, snap) {
+          body: StreamBuilder<List<MedicationModel>>(
+            stream: _reader.medsStreamForPatient(widget.patientUid),
+            builder: (context, medsSnap) {
+              final liveMeds = medsSnap.data ?? [];
+              // If the currently-selected med was deleted, clear the filter.
+              if (_selectedMedId != null &&
+                  liveMeds.every((m) => m.id != _selectedMedId)) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    setState(() {
+                      _selectedMedId   = null;
+                      _selectedMedName = null;
+                    });
+                  }
+                });
+              }
+              return StreamBuilder<List<IntakeRecord>>(
+                stream: _reader.streamForPatient(widget.patientUid),
+                builder: (context, snap) {
               if (snap.connectionState == ConnectionState.waiting) {
                 return const Center(
                     child: CircularProgressIndicator(color: _teal));
@@ -399,7 +428,7 @@ class _CaregiverIntakeHistoryScreenState
 
               return Column(
                 children: [
-                  _buildFilterBar(all, isDark, cs),
+                  _buildFilterBar(liveMeds, isDark, cs),
                   if (filtered.isNotEmpty)
                     _buildSummaryCard(counts, rate, isDark, cs),
                   Expanded(
@@ -417,7 +446,8 @@ class _CaregiverIntakeHistoryScreenState
                 ],
               );
             },
-          ),
+          );
+        }),
         );
       },
     );
@@ -426,7 +456,7 @@ class _CaregiverIntakeHistoryScreenState
   // ── Filter bar ─────────────────────────────────────────────────────────────
 
   Widget _buildFilterBar(
-      List<IntakeRecord> all, bool isDark, ColorScheme cs) {
+      List<MedicationModel> liveMeds, bool isDark, ColorScheme cs) {
     final chipBg     = isDark ? const Color(0xFF2A2A3E) : Colors.white;
     final chipBorder = isDark ? Colors.white12 : Colors.grey.shade200;
 
@@ -482,9 +512,9 @@ class _CaregiverIntakeHistoryScreenState
             ),
           ),
           const SizedBox(height: 8),
-          // Medication filter pill
+          // Medication filter pill — Flexible prevents overflow with long names
           GestureDetector(
-            onTap: () => _showMedFilter(all),
+            onTap: () => _showMedFilter(liveMeds),
             child: Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
@@ -506,14 +536,18 @@ class _CaregiverIntakeHistoryScreenState
                           ? _teal
                           : cs.onSurface.withValues(alpha: 0.45)),
                   const SizedBox(width: 6),
-                  Text(
-                    _selectedMedName ?? 'All Medications',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: _selectedMedId != null
-                          ? _teal
-                          : cs.onSurface.withValues(alpha: 0.6),
+                  Flexible(
+                    child: Text(
+                      _selectedMedName ?? 'All Medications',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: _selectedMedId != null
+                            ? _teal
+                            : cs.onSurface.withValues(alpha: 0.6),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
                   ),
                   const SizedBox(width: 4),

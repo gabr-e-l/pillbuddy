@@ -16,15 +16,17 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    // Always store email in lowercase so caregiver email-lookup queries match.
+    final normalizedEmail = email.trim().toLowerCase();
     final cred = await _auth.createUserWithEmailAndPassword(
-      email: email,
+      email: normalizedEmail,
       password: password,
     );
     await cred.user!.updateDisplayName(name);
     await _db.collection('users').doc(cred.user!.uid).set({
       'uid': cred.user!.uid,
       'name': name,
-      'email': email,
+      'email': normalizedEmail,
       'role': 'patient',
       'avatarIndex': 0,
       'createdAt': FieldValue.serverTimestamp(),
@@ -37,15 +39,16 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    final normalizedEmail = email.trim().toLowerCase();
     final cred = await _auth.createUserWithEmailAndPassword(
-      email: email,
+      email: normalizedEmail,
       password: password,
     );
     await cred.user!.updateDisplayName(name);
     await _db.collection('users').doc(cred.user!.uid).set({
       'uid': cred.user!.uid,
       'name': name,
-      'email': email,
+      'email': normalizedEmail,
       'role': 'caregiver',
       'avatarIndex': 0,
       'createdAt': FieldValue.serverTimestamp(),

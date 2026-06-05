@@ -320,6 +320,9 @@ class _MedDetailsScreenState extends State<MedDetailsScreen> {
             child: Text(
               _data.name,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              softWrap: true,
             ),
           ),
           Switch(

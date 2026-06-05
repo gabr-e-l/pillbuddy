@@ -25,6 +25,7 @@
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
@@ -66,6 +67,27 @@ class NotificationService {
     if (_initialized) return;
     tz.initializeTimeZones();
 
+    // ── Set the device's local timezone so zonedSchedule fires on time ──────
+    try {
+      final timezoneInfo = await FlutterTimezone.getLocalTimezone();
+      tz.setLocalLocation(tz.getLocation(timezoneInfo.identifier));
+    } catch (e) {
+      debugPrint('[NotificationService] Could not resolve timezone: $e');
+      // Fallback: derive UTC offset from the device clock and pick the closest
+      // timezone so alarms are still approximately correct.
+      final offset = DateTime.now().timeZoneOffset;
+      final offsetHours = offset.inHours;
+      final fallback = tz.timeZoneDatabase.locations.values.firstWhere(
+        (loc) {
+          if (loc.zones.isEmpty) return false;
+          final zone = loc.currentTimeZone;
+          return zone.offset == offsetHours * Duration.millisecondsPerHour;
+        },
+        orElse: () => tz.UTC,
+      );
+      tz.setLocalLocation(fallback);
+    }
+
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings(
       requestAlertPermission: true,
@@ -79,19 +101,17 @@ class NotificationService {
       onDidReceiveNotificationResponse: _onNotificationResponse,
     );
 
-    // ── Alarm channel — max importance + alarm audio attributes ──────────
-    // audioAttributesUsage: AudioAttributesUsage.alarm is the correct way
-    // to request DND bypass in flutter_local_notifications v18.x.
-    // (bypassDnd was added in a later release and is not available in v18.0.1.)
-    // Combined with category: AndroidNotificationCategory.alarm on each
-    // individual notification, Android treats these as alarms and will
-    // ring through Do Not Disturb on most devices.
+    // ── Alarm channel — max importance + custom alarm_sound.wav ──────────────
+    // The channel MUST declare the same sound as individual notifications;
+    // Android only reads the channel sound at channel-creation time, so we
+    // specify it here AND on every AndroidNotificationDetails call.
     const alarmChannel = AndroidNotificationChannel(
       _alarmChannelId,
       'Medication Alarms',
       description: 'Urgent alerts for scheduled medication doses',
       importance: Importance.max,
       playSound: true,
+      sound: RawResourceAndroidNotificationSound('alarm_sound'),
       enableVibration: true,
       audioAttributesUsage: AudioAttributesUsage.alarm,
     );
@@ -220,13 +240,18 @@ class NotificationService {
         priority: Priority.max,
         icon: '@drawable/ic_stat_notify',
         largeIcon: FilePathAndroidBitmap(iconPath),
-        sound: RawResourceAndroidNotificationSound('alarm_sound'),
+        // Use the alarm_sound.wav from res/raw — must match exactly
+        // what the channel was created with.
+        sound: const RawResourceAndroidNotificationSound('alarm_sound'),
         playSound: true,
         enableVibration: true,
+        // Keep the notification (and its sound loop) active for 10 seconds,
+        // then auto-dismiss so the alarm doesn't ring indefinitely.
+        timeoutAfter: 10000, // milliseconds → 10 seconds
         // Bypass DND at the notification level as well
         category: AndroidNotificationCategory.alarm,
-        fullScreenIntent: true,
         visibility: NotificationVisibility.public,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
       ),
       iOS: const DarwinNotificationDetails(
         presentAlert: true,

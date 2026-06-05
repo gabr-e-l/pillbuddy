@@ -154,7 +154,11 @@ class _TodayTabState extends State<_TodayTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildHeader(onSurface),
-          _buildHorizontalCalendar(theme),
+          // Wrap calendar in a no-text-scale zone so XL system font size
+          // cannot inflate the day/weekday labels beyond the fixed cell height.
+          MediaQuery.withNoTextScaling(
+            child: _buildHorizontalCalendar(theme),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
             child: Text(
@@ -206,12 +210,17 @@ class _TodayTabState extends State<_TodayTab> {
     final primary   = theme.colorScheme.primary;
     final surface   = theme.colorScheme.surface;
     final onSurface = theme.colorScheme.onSurface;
+    // Use a fixed logical height that never depends on font/button scale
+    // so the carousel never overflows at XL accessibility sizes.
+    const double itemHeight = 60.0;
+    const double vertPad    = 8.0;
+    const double totalHeight = itemHeight + vertPad * 2;
 
     return SizedBox(
-      height: 76,
+      height: totalHeight,
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: vertPad),
         itemCount: _calendarDays.length,
         itemBuilder: (context, i) {
           final day        = _calendarDays[i];
@@ -236,6 +245,8 @@ class _TodayTabState extends State<_TodayTab> {
                   Text(
                     _weekdayLabel(day),
                     style: TextStyle(
+                      // Clamp the weekday label to a fixed small size so it
+                      // never stretches the card at XL font scale.
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
                       color: isSelected
