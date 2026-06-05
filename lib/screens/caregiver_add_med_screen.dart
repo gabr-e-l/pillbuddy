@@ -864,6 +864,25 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
 
   Widget _buildMonthDayGrid(
       Color cardColor, Color onSurface, ColorScheme cs) {
+    // Determine the minimum selectable day:
+    //  • If start date is in the current month → days before start day are past
+    //  • If start date is in a future month → all 31 days are selectable
+    //  • If no start date → use today as the reference
+    final now       = DateTime.now();
+    final ref       = _startDate ?? now;
+    final int minDay;
+    if (ref.year == now.year && ref.month == now.month) {
+      // Start date is this month — days before today's day-of-month are past
+      minDay = ref.day;
+    } else if (ref.isBefore(DateTime(now.year, now.month, 1))) {
+      // Start date is in a past month — all days already past; still allow all
+      // so the caregiver can edit existing schedules.
+      minDay = 1;
+    } else {
+      // Future month — all days valid
+      minDay = 1;
+    }
+
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -879,22 +898,27 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
         ),
         itemCount: 31,
         itemBuilder: (_, i) {
-          final day = i + 1;
-          final sel = _selectedMonthDays.contains(day);
+          final day      = i + 1;
+          final sel      = _selectedMonthDays.contains(day);
+          final disabled = day < minDay;
           return GestureDetector(
-            onTap: () => setState(() {
-              if (sel) {
-                _selectedMonthDays.remove(day);
-              } else {
-                _selectedMonthDays.add(day);
-              }
-            }),
+            onTap: disabled
+                ? null
+                : () => setState(() {
+                      if (sel) {
+                        _selectedMonthDays.remove(day);
+                      } else {
+                        _selectedMonthDays.add(day);
+                      }
+                    }),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 150),
               decoration: BoxDecoration(
-                color: sel
-                    ? cs.primary
-                    : onSurface.withValues(alpha: 0.06),
+                color: disabled
+                    ? onSurface.withValues(alpha: 0.03)
+                    : sel
+                        ? cs.primary
+                        : onSurface.withValues(alpha: 0.06),
                 borderRadius: BorderRadius.circular(7),
               ),
               child: Center(
@@ -903,9 +927,11 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
-                    color: sel
-                        ? Colors.white
-                        : onSurface.withValues(alpha: 0.55),
+                    color: disabled
+                        ? onSurface.withValues(alpha: 0.2)
+                        : sel
+                            ? Colors.white
+                            : onSurface.withValues(alpha: 0.55),
                   ),
                 ),
               ),

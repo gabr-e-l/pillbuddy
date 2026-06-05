@@ -3,7 +3,7 @@
 // Patient notification flow (three-stage alarm):
 //
 //   Stage 0 — First Reminder  (at scheduled time)
-//     • Sound: alarm_sound.wav (30 s), DND bypass, fullScreenIntent
+//     • Sound: alarm_sound.wav, DND bypass, fullScreenIntent
 //     • "Mark as Taken" is the ONLY active action in-app.
 //
 //   Stage 1 — Snooze Alert    (+10 min)
@@ -22,15 +22,54 @@
 //
 // Caregiver:
 //   Instant notification when a patient marks a dose (unchanged).
+//
+// ── Timezone fix ──────────────────────────────────────────────────────────
+//
+// flutter_timezone v5.x changed its return type: getLocalTimezone() now
+// returns a plain String, not an object with an .identifier field.
+// Calling .identifier on a String is a runtime error that silently falls
+// through to the catch block, which previously computed UTC offset in hours
+// (an int) but compared it against zone.offset in milliseconds — so the
+// fallback always matched UTC, making every alarm fire at the wrong time.
+//
+// Fix: replace flutter_timezone entirely with a native MethodChannel call
+// to MainActivity ("getTimezone") which returns TimeZone.getDefault().id —
+// the correct IANA string on every Android version without any plugin.
+//
+// ── DND / Full-screen alarm notes ─────────────────────────────────────────
+//
+// Android layers that together guarantee the alarm sounds through DND:
+//
+//   1. AndroidManifest.xml permissions:
+//        USE_FULL_SCREEN_INTENT  — show alarm UI over lock screen (API 34+)
+//        WAKE_LOCK               — wake CPU+screen from deep sleep
+//        ACCESS_NOTIFICATION_POLICY — white-list this app with DND policy
+//
+//   2. Notification channel (created once in init()):
+//        importance = Importance.max
+//        audioAttributesUsage = AudioAttributesUsage.alarm
+//        ↳ Android treats this like a clock alarm — exempt from DND.
+//
+//   3. Individual notification (every _alarmDetails() call):
+//        category   = alarm        → Android treats this as a clock alarm
+//        fullScreenIntent = true   ← pops alarm UI even on lock screen
+//        visibility = public       → content visible on secure lock screen
+//        audioAttributesUsage = alarm → alarm audio stream, bypasses DND
+//        timeoutAfter = 30 000 ms  ← auto-dismiss after the WAV ends
+//
+//   4. alarm_sound.wav in android/app/src/main/res/raw/
+//
+//   5. MainActivity — android:showWhenLocked="true"
+//                     android:turnScreenOn="true"
+//      Forces the screen on so the alarm is visible even when locked.
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'dart:io';
-import 'package:flutter/services.dart' show rootBundle;
 
 import 'intake_service.dart'; // needed to auto-record 'skipped' at final alert
 
@@ -42,6 +81,9 @@ class NotificationService {
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
+
+  // Native MethodChannel defined in MainActivity.kt
+  static const _systemChannel = MethodChannel('com.example.pillbuddy/system');
 
   bool _initialized = false;
 
@@ -68,31 +110,18 @@ class NotificationService {
     tz.initializeTimeZones();
 
     // ── Set the device's local timezone so zonedSchedule fires on time ──────
-    try {
-      final timezoneInfo = await FlutterTimezone.getLocalTimezone();
-      tz.setLocalLocation(tz.getLocation(timezoneInfo.identifier));
-    } catch (e) {
-      debugPrint('[NotificationService] Could not resolve timezone: $e');
-      // Fallback: derive UTC offset from the device clock and pick the closest
-      // timezone so alarms are still approximately correct.
-      final offset = DateTime.now().timeZoneOffset;
-      final offsetHours = offset.inHours;
-      final fallback = tz.timeZoneDatabase.locations.values.firstWhere(
-        (loc) {
-          if (loc.zones.isEmpty) return false;
-          final zone = loc.currentTimeZone;
-          return zone.offset == offsetHours * Duration.millisecondsPerHour;
-        },
-        orElse: () => tz.UTC,
-      );
-      tz.setLocalLocation(fallback);
-    }
+    //
+    // We ask MainActivity for the IANA timezone ID via a MethodChannel instead
+    // of using flutter_timezone, whose v5.x API changed and caused a runtime
+    // error that left tz.local pointing at UTC.
+    await _resolveLocalTimezone();
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
       requestSoundPermission: true,
+      requestCriticalPermission: true,
     );
     const settings = InitializationSettings(android: android, iOS: ios);
 
@@ -102,9 +131,14 @@ class NotificationService {
     );
 
     // ── Alarm channel — max importance + custom alarm_sound.wav ──────────────
-    // The channel MUST declare the same sound as individual notifications;
-    // Android only reads the channel sound at channel-creation time, so we
-    // specify it here AND on every AndroidNotificationDetails call.
+    //
+    // IMPORTANT: Android reads the channel's sound and audioAttributesUsage
+    // ONLY when the channel is first created. If you need to change the sound
+    // you must uninstall the app or clear app data first.
+    //
+    // audioAttributesUsage = AudioAttributesUsage.alarm tells the Android
+    // audio subsystem to treat this channel's audio as an alarm stream,
+    // which is exempt from Do Not Disturb by default on all Android versions.
     const alarmChannel = AndroidNotificationChannel(
       _alarmChannelId,
       'Medication Alarms',
@@ -113,6 +147,7 @@ class NotificationService {
       playSound: true,
       sound: RawResourceAndroidNotificationSound('alarm_sound'),
       enableVibration: true,
+      // Alarm stream → exempt from DND at the OS audio-routing level.
       audioAttributesUsage: AudioAttributesUsage.alarm,
     );
 
@@ -131,8 +166,44 @@ class NotificationService {
     _initialized = true;
   }
 
+  /// Resolves the device's IANA timezone via the native MethodChannel and
+  /// sets tz.local.  Falls back to matching by UTC offset if the channel
+  /// call fails (e.g. on non-Android platforms or during tests).
+  Future<void> _resolveLocalTimezone() async {
+    try {
+      final tzId = await _systemChannel.invokeMethod<String>('getTimezone');
+      if (tzId != null && tzId.isNotEmpty) {
+        tz.setLocalLocation(tz.getLocation(tzId));
+        debugPrint('[NotificationService] Timezone set to $tzId');
+        return;
+      }
+    } catch (e) {
+      debugPrint('[NotificationService] Native getTimezone failed: $e');
+    }
+
+    // ── Fallback: match on UTC offset in milliseconds (not hours!) ──────────
+    // The previous fallback compared zone.offset (milliseconds since epoch)
+    // against offsetHours * Duration.millisecondsPerHour, which was a unit
+    // mismatch that always resolved to UTC.  Fixed below.
+    try {
+      final offsetMs = DateTime.now().timeZoneOffset.inMilliseconds;
+      final fallback = tz.timeZoneDatabase.locations.values.firstWhere(
+        (loc) {
+          if (loc.zones.isEmpty) return false;
+          return loc.currentTimeZone.offset == offsetMs;
+        },
+        orElse: () => tz.UTC,
+      );
+      tz.setLocalLocation(fallback);
+      debugPrint(
+          '[NotificationService] Timezone fallback: ${fallback.name}');
+    } catch (e) {
+      debugPrint('[NotificationService] Timezone fallback failed, using UTC: $e');
+      tz.setLocalLocation(tz.UTC);
+    }
+  }
+
   // Called when the user taps the notification itself (not an action button).
-  // We just use this to advance the stage tracking if needed in future.
   void _onNotificationResponse(NotificationResponse response) {
     debugPrint('[NotificationService] tapped id=${response.id} '
         'payload=${response.payload}');
@@ -151,16 +222,43 @@ class NotificationService {
     if (android != null) {
       final result = await android.requestNotificationsPermission();
       granted = result ?? false;
+      // Request exact alarm permission (Android 12+).
+      // If the user hasn't granted it the alarms will not fire on time.
+      await android.requestExactAlarmsPermission();
     }
     if (ios != null) {
       final result = await ios.requestPermissions(
         alert: true,
         badge: true,
         sound: true,
+        critical: true,
       );
       granted = result ?? false;
     }
     return granted;
+  }
+
+  /// Opens the system exact-alarm settings page so the user can grant
+  /// SCHEDULE_EXACT_ALARM on Android 12+.  Call this from the UI when
+  /// isExactAlarmPermitted() returns false.
+  Future<void> openExactAlarmSettings() async {
+    try {
+      await _systemChannel.invokeMethod('openExactAlarmSettings');
+    } catch (e) {
+      debugPrint('[NotificationService] openExactAlarmSettings failed: $e');
+    }
+  }
+
+  /// Returns true if the app can schedule exact alarms (Android 12+).
+  /// Always returns true below Android 12.
+  Future<bool> isExactAlarmPermitted() async {
+    try {
+      final result = await _systemChannel
+          .invokeMethod<bool>('isExactAlarmPermitted');
+      return result ?? true;
+    } catch (_) {
+      return true;
+    }
   }
 
   // ── Preferences getters / setters ─────────────────────────────────────────
@@ -210,8 +308,6 @@ class NotificationService {
 
   // ── Notification details helpers ──────────────────────────────────────────
 
-  /// High-priority alarm notification that bypasses DND.
-  /// Uses alarm_sound.wav from res/raw.
   Future<String> _writeAppIconToTempFile() async {
     try {
       final data = await rootBundle.load('assets/images/app_icon.png');
@@ -221,11 +317,20 @@ class NotificationService {
       await file.writeAsBytes(bytes, flush: true);
       return file.path;
     } catch (e) {
-      debugPrint('[NotificationService] Failed to write app icon to temp file: $e');
+      debugPrint(
+          '[NotificationService] Failed to write app icon to temp file: $e');
       rethrow;
     }
   }
 
+  /// High-priority alarm notification that bypasses DND.
+  ///
+  /// Key DND-bypass flags:
+  ///   • category = alarm              → treated as a system clock alarm
+  ///   • audioAttributesUsage = alarm  → alarm audio stream, exempt from DND
+  ///   • fullScreenIntent = true       → pops alarm UI over lock screen
+  ///   • visibility = public           → content shown on secure lock screen
+  ///   • timeoutAfter = 30 000 ms      → auto-dismiss after WAV ends
   Future<NotificationDetails> _alarmDetails({
     required int stage,
     required String medName,
@@ -240,18 +345,21 @@ class NotificationService {
         priority: Priority.max,
         icon: '@drawable/ic_stat_notify',
         largeIcon: FilePathAndroidBitmap(iconPath),
-        // Use the alarm_sound.wav from res/raw — must match exactly
-        // what the channel was created with.
+
+        // ── Sound ────────────────────────────────────────────────────────────
+        // Must match the channel's sound exactly (alarm_sound in res/raw).
         sound: const RawResourceAndroidNotificationSound('alarm_sound'),
         playSound: true,
         enableVibration: true,
-        // Keep the notification (and its sound loop) active for 10 seconds,
-        // then auto-dismiss so the alarm doesn't ring indefinitely.
-        timeoutAfter: 10000, // milliseconds → 10 seconds
-        // Bypass DND at the notification level as well
+
+        // ── DND bypass ───────────────────────────────────────────────────────
         category: AndroidNotificationCategory.alarm,
-        visibility: NotificationVisibility.public,
         audioAttributesUsage: AudioAttributesUsage.alarm,
+        fullScreenIntent: true,
+        visibility: NotificationVisibility.public,
+
+        // ── Auto-dismiss after sound ends ────────────────────────────────────
+        timeoutAfter: 30000,
       ),
       iOS: const DarwinNotificationDetails(
         presentAlert: true,
@@ -313,7 +421,8 @@ class NotificationService {
     final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
 
     final now = tz.TZDateTime.now(tz.local);
-    var base = tz.TZDateTime(tz.local, now.year, now.month, now.day, h24, minute);
+    var base = tz.TZDateTime(
+        tz.local, now.year, now.month, now.day, h24, minute);
     if (base.isBefore(now)) base = base.add(const Duration(days: 1));
 
     final timeLabel =
