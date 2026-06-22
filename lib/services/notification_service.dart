@@ -62,6 +62,16 @@
 //   5. MainActivity — android:showWhenLocked="true"
 //                     android:turnScreenOn="true"
 //      Forces the screen on so the alarm is visible even when locked.
+//
+// ── Multi-intake-time fix ───────────────────────────────────────────────
+//
+// Medications can have more than one scheduled time per day ("every 8
+// hours", "2 times a day", etc.) stored in MedicationModel.intakeTimes.
+// Previously only the medication's primary (first) hour/minute/period was
+// ever scheduled, so doses later in the day never alarmed.
+// scheduleMedicationReminders() now schedules a full 3-stage alarm set for
+// EVERY entry in intakeTimes, each addressed by a unique notification ID
+// (see _stageId, which now also encodes a timeIndex).
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -287,24 +297,31 @@ class NotificationService {
 
   // ── Alert-stage helpers ────────────────────────────────────────────────────
 
-  /// Returns the current notification stage for [medId]:
+  /// Returns the current notification stage for [medId] / [timeIndex]:
   ///   0 = first reminder not yet fired (or reset)
   ///   1 = snooze alert fired (10 min past)
   ///   2 = final alert fired (20 min past) — dose auto-skipped
-  Future<int> getAlertStage(String medId) async {
+  ///
+  /// [timeIndex] defaults to 0 so existing single-time callers (and the
+  /// primary-time lookup in patient_home.dart) keep working unchanged.
+  Future<int> getAlertStage(String medId, {int timeIndex = 0}) async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('$_stagePrefix$medId') ?? 0;
+    return prefs.getInt(_stageKey(medId, timeIndex)) ?? 0;
   }
 
-  Future<void> _setAlertStage(String medId, int stage) async {
+  Future<void> _setAlertStage(String medId, int stage,
+      {int timeIndex = 0}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('$_stagePrefix$medId', stage);
+    await prefs.setInt(_stageKey(medId, timeIndex), stage);
   }
 
-  Future<void> resetAlertStage(String medId) async {
+  Future<void> resetAlertStage(String medId, {int timeIndex = 0}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('$_stagePrefix$medId');
+    await prefs.remove(_stageKey(medId, timeIndex));
   }
+
+  String _stageKey(String medId, int timeIndex) =>
+      timeIndex == 0 ? '$_stagePrefix$medId' : '$_stagePrefix${medId}_$timeIndex';
 
   // ── Notification details helpers ──────────────────────────────────────────
 
@@ -392,19 +409,100 @@ class NotificationService {
   }
 
   // ── ID helpers ────────────────────────────────────────────────────────────
+  //
+  // Notification IDs now encode (stage, medId, timeIndex) so a medication
+  // with multiple daily intake times (e.g. "every 8 hours" → 3 times/day)
+  // gets a distinct set of alarm IDs per intake time instead of every extra
+  // time silently overwriting slot 0's pending alarm.
+  //
+  //   id = (stage + 1) * 1,000,000            (existing stage banding)
+  //        + timeIndex * 100,000               (new: up to 9 times/med)
+  //        + hash(medId) % 99,000               (existing per-med spread,
+  //                                              shrunk so it fits inside a
+  //                                              single 100,000-wide band)
+  //
+  // maxTimesPerMed bounds how many intake-time slots we will ever
+  // schedule/cancel for a single medication — comfortably above any realistic
+  // frequency while keeping IDs safely below the caregiver ID range
+  // (4,000,000+).
+  static const int maxTimesPerMed = 9;
 
-  int _stageId(String medId, int stage) =>
-      ((stage + 1) * 1000000) + medId.hashCode.abs() % 999000;
+  int _stageId(String medId, int stage, [int timeIndex = 0]) =>
+      ((stage + 1) * 1000000) +
+      (timeIndex * 100000) +
+      (medId.hashCode.abs() % 99000);
 
   int _caregiverId(String patientUid, String medId) =>
       4000000 + (patientUid + medId).hashCode.abs() % 999000;
 
-  // ── Patient: schedule all three alarms for one medication ────────────────
+  // ── Patient: schedule reminders for every intake time on a medication ────
+
+  /// Schedules reminders for EVERY intake time configured on a medication.
+  ///
+  /// [intakeTimes] should be the medication's full list of intake times
+  /// (each a {'hour','minute','period'} map). If empty, falls back to a
+  /// single occurrence built from [hour]/[minute]/[period] (the legacy
+  /// single-time fields), so medications without an intakeTimes list still
+  /// get scheduled exactly as before.
+  ///
+  /// This is the fix for medications with multiple daily intake times (e.g.
+  /// "every 8 hours" or "2 times a day"): previously only the primary
+  /// (first) time was ever scheduled, so doses later in the day never
+  /// alarmed. Now every configured time gets its own 3-stage alarm set,
+  /// each addressed by a unique notification ID (see _stageId).
+  Future<void> scheduleMedicationReminders({
+    required String medId,
+    required String medName,
+    required double dose,
+    required String unit,
+    required List<Map<String, dynamic>> intakeTimes,
+    required int hour,
+    required int minute,
+    required String period,
+  }) async {
+    final times = intakeTimes.isNotEmpty
+        ? intakeTimes
+        : [
+            {'hour': hour, 'minute': minute, 'period': period}
+          ];
+
+    // Cancel any previously scheduled slots first, in case the medication's
+    // intake-time count shrank since the last schedule call.
+    await cancelPatientReminder(medId);
+
+    final cappedTimes = times.length > maxTimesPerMed
+        ? times.sublist(0, maxTimesPerMed)
+        : times;
+
+    for (int i = 0; i < cappedTimes.length; i++) {
+      final t = cappedTimes[i];
+      // Defensive: Firestore can deserialize whole numbers as either int or
+      // num depending on path, so coerce rather than assume `int`.
+      final tHour = (t['hour'] as num?)?.toInt() ?? hour;
+      final tMinute = (t['minute'] as num?)?.toInt() ?? minute;
+      final tPeriod = t['period'] as String? ?? period;
+      await schedulePatientReminder(
+        medId: medId,
+        medName: medName,
+        dose: dose,
+        unit: unit,
+        hour: tHour,
+        minute: tMinute,
+        period: tPeriod,
+        timeIndex: i,
+      );
+    }
+  }
 
   /// Schedules three daily alarms (repeating via matchDateTimeComponents.time):
   ///   • Stage 0 — at [hour]:[minute]
   ///   • Stage 1 — +10 min  (snooze prompt)
   ///   • Stage 2 — +20 min  (final, then auto-skips)
+  ///
+  /// [timeIndex] identifies which of a medication's (possibly multiple)
+  /// daily intake times this call is scheduling, so each occurrence gets its
+  /// own non-colliding set of notification IDs. Defaults to 0 for
+  /// single-time medications / existing callers.
   Future<void> schedulePatientReminder({
     required String medId,
     required String medName,
@@ -413,6 +511,7 @@ class NotificationService {
     required int hour,    // 1-12
     required int minute,
     required String period, // 'AM' | 'PM'
+    int timeIndex = 0,
   }) async {
     await init();
     if (!await isPatientEnabled()) return;
@@ -431,7 +530,7 @@ class NotificationService {
 
     // Stage 0 — First Reminder
     await _plugin.zonedSchedule(
-      _stageId(medId, 0),
+      _stageId(medId, 0, timeIndex),
       '💊 Time for $medName',
       '$doseLabel — scheduled at $timeLabel',
       base,
@@ -440,12 +539,12 @@ class NotificationService {
           UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time,
-      payload: 'stage:0:$medId',
+      payload: 'stage:0:$medId:$timeIndex',
     );
 
     // Stage 1 — Snooze Alert (+10 min)
     await _plugin.zonedSchedule(
-      _stageId(medId, 1),
+      _stageId(medId, 1, timeIndex),
       '⏰ Reminder: $medName',
       "You haven't marked $medName as taken yet.",
       base.add(const Duration(minutes: 10)),
@@ -454,12 +553,12 @@ class NotificationService {
           UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time,
-      payload: 'stage:1:$medId',
+      payload: 'stage:1:$medId:$timeIndex',
     );
 
     // Stage 2 — Final Alert (+20 min)
     await _plugin.zonedSchedule(
-      _stageId(medId, 2),
+      _stageId(medId, 2, timeIndex),
       '⚠️ Final Alert: $medName',
       '$medName ($doseLabel) has been recorded as a missed dose.',
       base.add(const Duration(minutes: 20)),
@@ -468,14 +567,15 @@ class NotificationService {
           UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time,
-      payload: 'stage:2:$medId',
+      payload: 'stage:2:$medId:$timeIndex',
     );
 
     // Reset stage counter so the UI shows "Taken" as active until first alarm.
-    await resetAlertStage(medId);
+    await resetAlertStage(medId, timeIndex: timeIndex);
 
     debugPrint(
-        '[NotificationService] Scheduled 3-stage alarms for $medName at $timeLabel');
+        '[NotificationService] Scheduled 3-stage alarms for $medName '
+        '(slot $timeIndex) at $timeLabel');
   }
 
   /// Called by patient_home.dart when each notification fires (via a
@@ -485,9 +585,10 @@ class NotificationService {
     required String medId,
     required String medName,
     required int stage,
+    int timeIndex = 0,
   }) async {
-    await _setAlertStage(medId, stage);
-    debugPrint('[NotificationService] Stage $stage fired for $medId');
+    await _setAlertStage(medId, stage, timeIndex: timeIndex);
+    debugPrint('[NotificationService] Stage $stage fired for $medId (slot $timeIndex)');
 
     if (stage == 2) {
       // Auto-record 'skipped' — patient can still change to 'taken_late'
@@ -505,12 +606,15 @@ class NotificationService {
     }
   }
 
-  /// Cancel all three alarm slots for a given medication.
+  /// Cancel all three alarm slots, across every intake-time slot, for a
+  /// given medication.
   Future<void> cancelPatientReminder(String medId) async {
-    for (int s = 0; s < 3; s++) {
-      await _plugin.cancel(_stageId(medId, s));
+    for (int t = 0; t < maxTimesPerMed; t++) {
+      for (int s = 0; s < 3; s++) {
+        await _plugin.cancel(_stageId(medId, s, t));
+      }
+      await resetAlertStage(medId, timeIndex: t);
     }
-    await resetAlertStage(medId);
   }
 
   Future<void> cancelAllPatientReminders() async {

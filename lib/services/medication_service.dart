@@ -48,9 +48,27 @@ class MedicationService {
     return MedicationModel.fromDoc(doc);
   }
 
+  /// Real-time stream of a single medication document. Used by screens like
+  /// Medication Details so fields that change outside the screen itself
+  /// (e.g. stockCount being decremented when a dose is marked taken on the
+  /// Home tab) are reflected live instead of staying frozen at whatever
+  /// snapshot the screen was opened with.
+  Stream<MedicationModel?> medicationStream(String medId) {
+    return _medsRef.doc(medId).snapshots().map(
+        (doc) => doc.exists ? MedicationModel.fromDoc(doc) : null);
+  }
+
   // ── Update ────────────────────────────────────────────────────────────────
 
   /// Update an existing medication document.
+  ///
+  /// IMPORTANT: MedicationModel.toMap() always includes
+  /// 'createdAt': FieldValue.serverTimestamp() (so addMedication() above
+  /// gets a correct creation time on insert). Firestore's .update() only
+  /// touches the fields present in the map it's given, so stripping
+  /// 'createdAt' here before calling .update() means the original creation
+  /// timestamp is left untouched on every subsequent edit instead of being
+  /// silently overwritten on each save.
   Future<void> updateMedication(String medId, MedicationModel med) async {
     final map = med.toMap()..remove('createdAt'); // don't overwrite timestamp
     await _medsRef.doc(medId).update(map);

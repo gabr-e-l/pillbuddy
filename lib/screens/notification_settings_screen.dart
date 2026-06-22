@@ -14,6 +14,16 @@
 //   • Toggle intake-update notifications on / off
 //   • Explains that they get notified for Taken / Taken Late / Missed
 //
+// ── Exact alarm permission fix ───────────────────────────────────────────
+//
+// NotificationService already exposed isExactAlarmPermitted() and
+// openExactAlarmSettings(), but this screen never called them, so a patient
+// on Android 12+ who hadn't granted SCHEDULE_EXACT_ALARM had no way of
+// knowing their reminders could silently fail. This screen now checks the
+// permission on load and on app resume (in case the user grants it from
+// system Settings and comes back), and shows a warning card with a button
+// to jump straight to the relevant settings page when it's missing.
+//
 // UPDATED: "Snoozed" removed throughout. Step descriptions updated to reflect
 // the stage-aware Mark-As sheet in patient_home.dart.
 
@@ -37,16 +47,38 @@ class NotificationSettingsScreen extends StatefulWidget {
 }
 
 class _NotificationSettingsScreenState
-    extends State<NotificationSettingsScreen> {
+    extends State<NotificationSettingsScreen> with WidgetsBindingObserver {
   final _svc = NotificationService();
 
   bool _enabled = true;
   bool _loading = true;
 
+  // Exact-alarm permission (Android 12+ / API 31+). Irrelevant on iOS and on
+  // older Android versions, where isExactAlarmPermitted() always reports true.
+  bool _exactAlarmPermitted = true;
+  bool _checkingExactAlarm = false;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Catches the user granting the permission in system Settings and then
+    // returning to the app (Settings opens as a separate Activity, so this
+    // screen merely pauses/resumes rather than being recreated).
+    if (state == AppLifecycleState.resumed) {
+      _checkExactAlarmPermission();
+    }
   }
 
   Future<void> _load() async {
@@ -54,6 +86,30 @@ class _NotificationSettingsScreenState
         ? await _svc.isCaregiverEnabled()
         : await _svc.isPatientEnabled();
     if (mounted) setState(() { _enabled = enabled; _loading = false; });
+    if (!widget.isCaregiverMode) await _checkExactAlarmPermission();
+  }
+
+  /// Re-checks SCHEDULE_EXACT_ALARM status. Safe to call repeatedly (e.g. on
+  /// resume after the user visits system Settings) since it just reads the
+  /// current OS state.
+  Future<void> _checkExactAlarmPermission() async {
+    if (widget.isCaregiverMode) return;
+    if (mounted) setState(() => _checkingExactAlarm = true);
+    final permitted = await _svc.isExactAlarmPermitted();
+    if (mounted) {
+      setState(() {
+        _exactAlarmPermitted = permitted;
+        _checkingExactAlarm = false;
+      });
+    }
+  }
+
+  Future<void> _openExactAlarmSettings() async {
+    await _svc.openExactAlarmSettings();
+    // The user may grant the permission and return to the app — re-check
+    // once they're back on this screen rather than leaving a stale
+    // "not permitted" banner up indefinitely.
+    if (mounted) await _checkExactAlarmPermission();
   }
 
   Future<void> _toggle(bool value) async {
@@ -67,6 +123,7 @@ class _NotificationSettingsScreenState
       await _svc.setPatientEnabled(value);
     }
     if (mounted) setState(() => _enabled = value);
+    if (value && !widget.isCaregiverMode) await _checkExactAlarmPermission();
   }
 
   void _showPermissionDenied() {
@@ -208,6 +265,24 @@ class _NotificationSettingsScreenState
                 ),
 
                 const SizedBox(height: 20),
+
+                // ── Exact alarm permission warning (patient only, Android 12+) ──
+                //
+                // NotificationService already exposes isExactAlarmPermitted()
+                // and openExactAlarmSettings(); this surfaces that state to
+                // the patient instead of letting alarms silently fail.
+                if (!widget.isCaregiverMode &&
+                    !_loading &&
+                    !_checkingExactAlarm &&
+                    !_exactAlarmPermitted) ...[
+                  _ExactAlarmWarningCard(
+                    cardColor: cardColor,
+                    isDark: isDark,
+                    onSurface: onSurface,
+                    onFix: _openExactAlarmSettings,
+                  ),
+                  const SizedBox(height: 20),
+                ],
 
                 // ── How it works ─────────────────────────────────────────
                 Text(
@@ -364,6 +439,95 @@ class _NotificationSettingsScreenState
       ),
     ];
     return steps.map((s) => _StepRow(data: s, onSurface: onSurface)).toList();
+  }
+}
+
+// ── Exact alarm permission warning ───────────────────────────────────────────
+//
+// Shown only on Android 12+ when SCHEDULE_EXACT_ALARM has not been granted.
+// Without this permission, zonedSchedule(... exactAllowWhileIdle) silently
+// degrades to an inexact alarm (or fails to fire at all on some OEM skins),
+// so medication reminders can be late or missed without any visible error.
+class _ExactAlarmWarningCard extends StatelessWidget {
+  final Color cardColor;
+  final bool isDark;
+  final Color onSurface;
+  final VoidCallback onFix;
+
+  const _ExactAlarmWarningCard({
+    required this.cardColor,
+    required this.isDark,
+    required this.onSurface,
+    required this.onFix,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const warningColor = Color(0xFFEF5350);
+    return _SectionCard(
+      cardColor: cardColor,
+      isDark: isDark,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  color: warningColor.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.alarm_off_rounded,
+                    color: warningColor, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Exact Alarms Not Allowed',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: onSurface),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Your device is blocking precisely-timed alarms for '
+                      'PillBuddy. Medication reminders may be delayed or '
+                      'may not ring at all until this is allowed.',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: onSurface.withValues(alpha: 0.55),
+                          height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: onFix,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: warningColor,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Allow Exact Alarms',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

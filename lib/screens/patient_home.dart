@@ -20,6 +20,46 @@
 //   → same as expired).
 //
 //   'Snoozed' has been fully removed.
+//
+// ── Notification scheduling fixes ────────────────────────────────────────
+//
+//   • Multi-intake times: _scheduleRemindersIfChanged() calls
+//     NotificationService.scheduleMedicationReminders() (passing the
+//     medication's full intakeTimes list) instead of the old single-time
+//     schedulePatientReminder(), so meds with multiple daily doses (e.g.
+//     "every 8 hours") get an alarm for every dose, not just the first.
+//   • Repeated scheduling: a signature guard (_lastScheduledSignature) means
+//     we only reschedule when the medId/dose/unit/time data actually
+//     changed, instead of on every Firestore snapshot rebuild (which could
+//     be triggered by something unrelated, like an intake status update).
+//   • Stale reminders: _lastScheduledMedIds tracks which meds we last
+//     scheduled for today. If a medication drops out of today's active list
+//     (deleted, deactivated, or past its stop date) its pending alarms are
+//     now explicitly cancelled instead of being left to fire forever.
+//
+// ── Multi-intake-time dashboard fix ──────────────────────────────────────
+//
+//   The fixes above made NotificationService schedule (and correctly track
+//   the alarm stage for) every configured intake time on a medication — but
+//   the dashboard itself still only ever rendered ONE card per medication,
+//   using the legacy primary hour/minute/period fields. A medication with
+//   3 daily intake times would fire 3 alarms a day but only ever show (and
+//   allow marking) the first one.
+//
+//   Fix: _buildMedList() now expands every active medication into one
+//   _DoseSlot per configured intake time (falling back to the legacy
+//   hour/minute/period when intakeTimes is empty, so single-dose meds are
+//   unaffected). Each slot:
+//     • Looks up its own status via IntakeService's composite
+//       '{medId}_{timeIndex}' key (see intake_service.dart) instead of a
+//       bare medId — so marking one dose "Taken" no longer overwrites every
+//       other dose of that medication on the same day.
+//     • Runs the auto-skip / window-expiry check against ITS OWN scheduled
+//       time, not the medication's primary time.
+//     • Reads/writes its alarm stage via
+//       NotificationService.getAlertStage(medId, timeIndex: t) so the
+//       Mark-As sheet's enabled/disabled buttons reflect that specific
+//       dose's stage, not always slot 0's.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -53,14 +93,71 @@ bool _isToday(DateTime date) {
       date.day == now.day;
 }
 
-/// True when the 20-minute alarm window for [med] on [date] has elapsed.
-bool _isWindowExpired(MedicationModel med, DateTime date) {
+/// True when the 20-minute alarm window for a dose scheduled at
+/// [hour]/[minute]/[period] on [date] has elapsed.
+///
+/// Takes the slot's own time directly (rather than a MedicationModel) so it
+/// can be evaluated per intake-time slot, not just a medication's primary
+/// time.
+bool _isWindowExpired(int hour, int minute, String period, DateTime date) {
   if (_isPastDate(date)) return true;
   if (!_isToday(date)) return false;
-  final h24 = med.hour % 12 + (med.period == 'PM' ? 12 : 0);
-  final scheduled =
-      DateTime(date.year, date.month, date.day, h24, med.minute);
+  final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
+  final scheduled = DateTime(date.year, date.month, date.day, h24, minute);
   return DateTime.now().isAfter(scheduled.add(const Duration(minutes: 20)));
+}
+
+/// One concrete, mark-able dose: a medication paired with one of its
+/// configured intake times. A medication with 3 intake times produces 3
+/// _DoseSlots per day; a medication with no intakeTimes configured produces
+/// exactly 1, built from its legacy hour/minute/period fields.
+class _DoseSlot {
+  final MedicationModel med;
+  final int timeIndex;
+  final int hour;
+  final int minute;
+  final String period;
+
+  _DoseSlot({
+    required this.med,
+    required this.timeIndex,
+    required this.hour,
+    required this.minute,
+    required this.period,
+  });
+
+  String get medId => med.id ?? med.name;
+}
+
+/// Expands [med] into one _DoseSlot per configured intake time. Falls back
+/// to the legacy single hour/minute/period when intakeTimes is empty, so
+/// medications created before multi-intake-time support keep working
+/// unchanged.
+List<_DoseSlot> _expandDoseSlots(MedicationModel med) {
+  if (med.intakeTimes.isEmpty) {
+    return [
+      _DoseSlot(
+        med: med,
+        timeIndex: 0,
+        hour: med.hour,
+        minute: med.minute,
+        period: med.period,
+      ),
+    ];
+  }
+
+  final slots = <_DoseSlot>[];
+  for (int i = 0; i < med.intakeTimes.length; i++) {
+    final t = med.intakeTimes[i];
+    slots.add(_DoseSlot(
+      med: med,
+      timeIndex: i,
+      hour: (t['hour'] as num?)?.toInt() ?? med.hour,
+      minute: (t['minute'] as num?)?.toInt() ?? med.minute,
+      period: t['period'] as String? ?? med.period,
+    ));
+  }
+  return slots;
 }
 
 // ── Root widget ───────────────────────────────────────────────────────────────
@@ -130,10 +227,26 @@ class _TodayTabState extends State<_TodayTab> {
   DateTime _selectedDate = DateTime.now();
   late final List<DateTime> _calendarDays;
 
-  // Tracks "{date}_{medId}" keys that have already been auto-skipped THIS
-  // session. Once a key is in this set we never write to Firestore again,
-  // so a patient's "Taken Late" correction cannot be overwritten.
+  // Tracks "{date}_{medId}_{timeIndex}" keys that have already been
+  // auto-skipped THIS session. Once a key is in this set we never write to
+  // Firestore again, so a patient's "Taken Late" correction cannot be
+  // overwritten.
   final Set<String> _autoSkippedKeys = {};
+
+  // Guards scheduleMedicationReminders() against being re-invoked on every
+  // Firestore snapshot rebuild. The StreamBuilder in _buildMedList() rebuilds
+  // on ANY change under the medications collection (including unrelated
+  // fields), so without a guard every rebuild would re-call
+  // scheduleMedicationReminders() for every active medication, stacking
+  // duplicate pending notifications. We only reschedule when the actual set
+  // of (medId, time, dose) signatures changes.
+  String? _lastScheduledSignature;
+
+  // Tracks which medIds we last scheduled reminders for. If a medId
+  // disappears from today's active list (deleted, deactivated, or past its
+  // stop date) on the next rebuild, its pending alarms are cancelled instead
+  // of being left to fire indefinitely.
+  Set<String> _lastScheduledMedIds = {};
 
   @override
   void initState() {
@@ -292,22 +405,31 @@ class _TodayTabState extends State<_TodayTab> {
         final allMeds = medSnap.data ?? [];
         final meds    = allMeds.where((m) => m.isActiveOn(_selectedDate)).toList();
 
-        // Schedule reminders only for today's active meds.
-        for (final med in allMeds.where((m) => m.isActiveOn(DateTime.now()))) {
-          _notifService.schedulePatientReminder(
-            medId:   med.id ?? med.name,
-            medName: med.name,
-            dose:    med.dose,
-            unit:    med.unit,
-            hour:    med.hour,
-            minute:  med.minute,
-            period:  med.period,
-          );
-        }
+        // Schedule reminders for today's active meds — guarded so this only
+        // (re)runs when the underlying schedule actually changed, not on
+        // every snapshot rebuild (e.g. a status update elsewhere triggering
+        // this StreamBuilder to rebuild with otherwise-identical med data).
+        _scheduleRemindersIfChanged(
+            allMeds.where((m) => m.isActiveOn(DateTime.now())).toList());
 
         if (meds.isEmpty && allMeds.isEmpty) return _buildEmptyState(onSurface);
 
-        if (meds.isEmpty) {
+        // Expand every active medication into one dose slot per configured
+        // intake time. This is what makes a 2x/day or 3x/day medication show
+        // up as multiple, independently mark-able cards instead of one.
+        final doseSlots = <_DoseSlot>[
+          for (final med in meds) ..._expandDoseSlots(med),
+        ];
+        // Sort by time-of-day so doses appear in chronological order rather
+        // than grouped by medication.
+        doseSlots.sort((a, b) {
+          final aH = a.hour % 12 + (a.period == 'PM' ? 12 : 0);
+          final bH = b.hour % 12 + (b.period == 'PM' ? 12 : 0);
+          if (aH != bH) return aH.compareTo(bH);
+          return a.minute.compareTo(b.minute);
+        });
+
+        if (doseSlots.isEmpty) {
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -337,11 +459,12 @@ class _TodayTabState extends State<_TodayTab> {
 
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
-              itemCount: meds.length,
+              itemCount: doseSlots.length,
               itemBuilder: (context, i) {
-                final med   = meds[i];
-                final medId = med.id!;
-                String? status = intakes[medId];
+                final slot   = doseSlots[i];
+                final medId  = slot.medId;
+                final lookupKey = IntakeService.mapKey(medId, slot.timeIndex);
+                String? status = intakes[lookupKey];
 
                 // ── Auto-skip logic ──────────────────────────────
                 // Rules:
@@ -349,30 +472,35 @@ class _TodayTabState extends State<_TodayTab> {
                 //  • Never overwrites 'taken' or 'taken_late' — those are
                 //    patient corrections that must be preserved.
                 //  • Uses _autoSkippedKeys (a session-level Set) as a
-                //    write-once guard. Once a key like "2024-06-01_medId"
-                //    is in the set we NEVER write to Firestore again, even
-                //    if the stream momentarily emits null on re-subscription
-                //    (e.g. after navigating away and back). This is the root
-                //    cause of the revert bug: the stream briefly returns an
-                //    empty map before the real data arrives, and without this
-                //    guard the auto-skip would fire again and overwrite the
+                //    write-once guard, keyed per dose SLOT (medId + time
+                //    index), not just per medication — so auto-skipping
+                //    dose #1 of the day never touches dose #2's status.
+                //    Once a key like "2024-06-01_medId_1" is in the set we
+                //    NEVER write to Firestore again, even if the stream
+                //    momentarily emits null on re-subscription (e.g. after
+                //    navigating away and back). This is the root cause of
+                //    the revert bug: the stream briefly returns an empty map
+                //    before the real data arrives, and without this guard
+                //    the auto-skip would fire again and overwrite the
                 //    patient's 'taken_late' correction with 'skipped'.
-                if (_isWindowExpired(med, selectedDate)) {
+                if (_isWindowExpired(
+                    slot.hour, slot.minute, slot.period, selectedDate)) {
                   if (status == 'taken' || status == 'taken_late') {
                     // Patient has already corrected this — do nothing.
                   } else {
                     final skipKey =
-                        '\${selectedDate.year}-'
-                        "\${selectedDate.month.toString().padLeft(2, '0')}-"
-                        "\${selectedDate.day.toString().padLeft(2, '0')}"
-                        '_\$medId';
+                        '${selectedDate.year}-'
+                        "${selectedDate.month.toString().padLeft(2, '0')}-"
+                        "${selectedDate.day.toString().padLeft(2, '0')}"
+                        '_$lookupKey';
                     if (!_autoSkippedKeys.contains(skipKey)) {
                       _autoSkippedKeys.add(skipKey);
                       _intakeService.recordIntake(
-                        medId:   medId,
-                        medName: med.name,
-                        status:  'skipped',
-                        date:    selectedDate,
+                        medId:     medId,
+                        medName:   slot.med.name,
+                        status:    'skipped',
+                        timeIndex: slot.timeIndex,
+                        date:      selectedDate,
                       );
                     }
                     status = 'skipped';
@@ -380,7 +508,11 @@ class _TodayTabState extends State<_TodayTab> {
                 }
 
                 return _MedCard(
-                  med:          med,
+                  med:          slot.med,
+                  timeIndex:    slot.timeIndex,
+                  hour:         slot.hour,
+                  minute:       slot.minute,
+                  period:       slot.period,
                   status:       status,
                   selectedDate: selectedDate,
                   onStatusChanged: (newStatus) async {
@@ -391,21 +523,24 @@ class _TodayTabState extends State<_TodayTab> {
                     // auto-skip block's "status == taken_late" guard works
                     // correctly on the very next rebuild.
                     final skipKey =
-                        '\${selectedDate.year}-'
-                        "\${selectedDate.month.toString().padLeft(2, '0')}-"
-                        "\${selectedDate.day.toString().padLeft(2, '0')}"
-                        '_\$medId';
+                        '${selectedDate.year}-'
+                        "${selectedDate.month.toString().padLeft(2, '0')}-"
+                        "${selectedDate.day.toString().padLeft(2, '0')}"
+                        '_$lookupKey';
                     _autoSkippedKeys.remove(skipKey);
 
                     if (newStatus == null) {
                       await _intakeService.deleteIntake(
-                          medId: medId, date: selectedDate);
+                          medId: medId,
+                          timeIndex: slot.timeIndex,
+                          date: selectedDate);
                     } else {
                       await _intakeService.recordIntake(
-                        medId:   medId,
-                        medName: med.name,
-                        status:  newStatus,
-                        date:    selectedDate,
+                        medId:     medId,
+                        medName:   slot.med.name,
+                        status:    newStatus,
+                        timeIndex: slot.timeIndex,
+                        date:      selectedDate,
                       );
                     }
                   },
@@ -416,6 +551,61 @@ class _TodayTabState extends State<_TodayTab> {
         );
       },
     );
+  }
+
+  /// Schedules patient reminders for [todaysMeds], but only if the relevant
+  /// schedule data (which meds, their intake times, dose) actually changed
+  /// since the last time we scheduled. This is the fix for the
+  /// repeated-scheduling bug: schedulePatientReminder() was previously
+  /// called directly inside the StreamBuilder's build callback with no
+  /// guard, so every Firestore snapshot rebuild (including ones triggered by
+  /// unrelated writes, like an intake status update) re-scheduled every
+  /// alarm and could stack duplicate pending notifications.
+  ///
+  /// Also cancels reminders for any medication that was scheduled last time
+  /// but has dropped out of today's active list (deleted, deactivated, or
+  /// past its stop date) — without this, those alarms would otherwise keep
+  /// firing forever since nothing would ever cancel them again.
+  void _scheduleRemindersIfChanged(List<MedicationModel> todaysMeds) {
+    final currentMedIds = todaysMeds.map((m) => m.id ?? m.name).toSet();
+
+    final removedMedIds = _lastScheduledMedIds.difference(currentMedIds);
+    for (final medId in removedMedIds) {
+      _notifService.cancelPatientReminder(medId);
+    }
+    _lastScheduledMedIds = currentMedIds;
+
+    final signature = todaysMeds
+        .map((m) {
+          final times = m.intakeTimes.isNotEmpty
+              ? m.intakeTimes
+              : [
+                  {'hour': m.hour, 'minute': m.minute, 'period': m.period}
+                ];
+          final timesKey = times
+              .map((t) => '${t['hour']}:${t['minute']}${t['period']}')
+              .join(',');
+          return '${m.id ?? m.name}|${m.dose}|${m.unit}|$timesKey';
+        })
+        .toList()
+      ..sort();
+    final joined = signature.join(';');
+
+    if (joined == _lastScheduledSignature) return;
+    _lastScheduledSignature = joined;
+
+    for (final med in todaysMeds) {
+      _notifService.scheduleMedicationReminders(
+        medId:       med.id ?? med.name,
+        medName:     med.name,
+        dose:        med.dose,
+        unit:        med.unit,
+        intakeTimes: med.intakeTimes,
+        hour:        med.hour,
+        minute:      med.minute,
+        period:      med.period,
+      );
+    }
   }
 
   Widget _buildEmptyState(Color onSurface) {
@@ -454,12 +644,24 @@ class _TodayTabState extends State<_TodayTab> {
 
 class _MedCard extends StatefulWidget {
   final MedicationModel                med;
+  // The specific intake-time slot this card represents. hour/minute/period
+  // are THIS slot's time (which may differ from med.hour/minute/period for
+  // medications with multiple daily doses) — timeIndex is the matching
+  // index into med.intakeTimes (or 0 for the legacy single-time fallback).
+  final int                            timeIndex;
+  final int                            hour;
+  final int                            minute;
+  final String                         period;
   final String?                        status;
   final DateTime                       selectedDate;
   final Future<void> Function(String?) onStatusChanged;
 
   const _MedCard({
     required this.med,
+    required this.timeIndex,
+    required this.hour,
+    required this.minute,
+    required this.period,
     required this.status,
     required this.selectedDate,
     required this.onStatusChanged,
@@ -491,13 +693,17 @@ class _MedCardState extends State<_MedCard> {
 
   Future<void> _refreshStage() async {
     if (!_isToday(widget.selectedDate)) return;
-    final stage = await _notifService.getAlertStage(widget.med.id ?? widget.med.name);
+    final stage = await _notifService.getAlertStage(
+      widget.med.id ?? widget.med.name,
+      timeIndex: widget.timeIndex,
+    );
     if (mounted) setState(() => _alertStage = stage);
   }
 
   MedicationModel get med => widget.med;
 
-  bool get _windowExpired => _isWindowExpired(med, widget.selectedDate);
+  bool get _windowExpired =>
+      _isWindowExpired(widget.hour, widget.minute, widget.period, widget.selectedDate);
 
   // Taken is only active on today, stage 0, window not yet expired.
   bool get _takenActive => !_windowExpired && _alertStage == 0;
@@ -584,8 +790,8 @@ class _MedCardState extends State<_MedCard> {
                     color: onSurface)),
             Text(
               '${med.dose} ${med.unit}  ·  '
-              '${med.hour.toString().padLeft(2, '0')}:'
-              '${med.minute.toString().padLeft(2, '0')} ${med.period}',
+              '${widget.hour.toString().padLeft(2, '0')}:'
+              '${widget.minute.toString().padLeft(2, '0')} ${widget.period}',
               style: TextStyle(fontSize: 13, color: onSurface.withOpacity(0.5)),
             ),
             if (showBanner) ...[
@@ -675,14 +881,14 @@ class _MedCardState extends State<_MedCard> {
               child: Column(
                 children: [
                   Text(
-                    '${med.hour.toString().padLeft(2, '0')}:'
-                    '${med.minute.toString().padLeft(2, '0')}',
+                    '${widget.hour.toString().padLeft(2, '0')}:'
+                    '${widget.minute.toString().padLeft(2, '0')}',
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
                         color: onSurface),
                   ),
-                  Text(med.period,
+                  Text(widget.period,
                       style: TextStyle(
                           fontSize: 12, color: onSurface.withOpacity(0.45))),
                 ],

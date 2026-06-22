@@ -4,7 +4,17 @@
 // Wired to Firestore via MedicationService:
 //   - Every picker change auto-saves to Firestore.
 //   - Delete removes the document and pops the screen.
+//
+// ── Stock display fix ─────────────────────────────────────────────────────
+//
+// stockCount can now change from OUTSIDE this screen — e.g. a dose marked
+// "Taken" on the Home tab decrements it via IntakeService's transaction.
+// Previously this screen only read stockCount once, from the static
+// MedicationModel snapshot it was opened with, so the displayed stock never
+// reflected real usage. It now subscribes to MedicationService.medicationStream()
+// and keeps _data.stockCount/_data.stockUnit in sync with Firestore.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/medication_model.dart';
 import '../services/medication_service.dart';
@@ -32,11 +42,39 @@ class _MedDetailsScreenState extends State<MedDetailsScreen> {
   bool _isSaving = false;
   bool _isDeleting = false;
 
+  StreamSubscription<MedicationModel?>? _medSub;
+
   @override
   void initState() {
     super.initState();
     // Initialise from the MedicationModel passed in — no extra Firestore fetch needed
     _data = MedDetailsData.fromModel(widget.initialMed);
+
+    // Keep _data.stockCount/stockUnit in sync with Firestore so:
+    //   • the stats card (which reads _data directly) and the stock
+    //     picker's pre-filled value never disagree, and
+    //   • opening the stock picker after stock has been decremented
+    //     elsewhere (e.g. a dose marked "Taken" on the Home tab) shows the
+    //     current count rather than the stale value this screen was opened
+    //     with.
+    // Other fields are intentionally left to the static initial snapshot —
+    // this screen is the source of truth for editing them, so we don't want
+    // an external write racing the user's in-progress edits.
+    _medSub = _service.medicationStream(widget.medId).listen((med) {
+      if (med == null || !mounted) return;
+      if (_data.stockCount != med.stockCount || _data.stockUnit != med.stockUnit) {
+        setState(() {
+          _data.stockCount = med.stockCount;
+          _data.stockUnit = med.stockUnit;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _medSub?.cancel();
+    super.dispose();
   }
 
   // ── Persist helpers ────────────────────────────────────────────────────────
