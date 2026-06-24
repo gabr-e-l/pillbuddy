@@ -60,6 +60,23 @@
 //       NotificationService.getAlertStage(medId, timeIndex: t) so the
 //       Mark-As sheet's enabled/disabled buttons reflect that specific
 //       dose's stage, not always slot 0's.
+//
+// ── Follow-Up (+10) / Final (+20) "Taken" button bug ─────────────────────
+//
+//   NotificationService.getAlertStage() only reflects reality when the
+//   patient TAPS a notification (flutter_local_notifications has no
+//   Dart-side callback for silent delivery). A patient who opens the app
+//   normally — without tapping the alarm — kept seeing "Taken" as the only
+//   active Mark-As option straight through the Follow-Up and Final windows,
+//   instead of "Taken Late" becoming active at +10 min.
+//
+//   Fix: _wallClockStage() (top of this file) derives the same 0/1/2 staging
+//   purely from the scheduled time vs. now, with no dependency on taps.
+//   _MedCardState._refreshStage() now takes max(persistedStage, wallClock)
+//   so the Mark-As sheet is correct the moment it's opened, tap or no tap.
+//   This is also what makes the corresponding NotificationService scheduling
+//   fix (today's Follow-Up/Final one-shots no longer being clobbered with
+//   tomorrow's times on app cold-start) actually visible in the UI.
 
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -105,6 +122,41 @@ bool _isWindowExpired(int hour, int minute, String period, DateTime date) {
   final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
   final scheduled = DateTime(date.year, date.month, date.day, h24, minute);
   return DateTime.now().isAfter(scheduled.add(const Duration(minutes: 20)));
+}
+
+/// Computes the three-stage alarm stage (0/1/2) purely from wall-clock time,
+/// independent of whether the patient ever TAPPED a notification.
+///
+/// ── Why this exists ──────────────────────────────────────────────────────
+/// NotificationService.getAlertStage() reads a value that is only written by
+/// onAlarmFired(), which flutter_local_notifications only calls when a
+/// notification is TAPPED — never on silent delivery. A patient who simply
+/// hears/sees the alarm and opens the app from the home-screen icon (the
+/// common case) would otherwise leave that SharedPreferences value stuck at
+/// 0 forever, so the Mark-As sheet kept showing "Taken" as the only active
+/// option well into the Follow-Up (+10 min) and Final (+20 min) windows
+/// instead of switching to "Taken Late".
+///
+/// This function derives the same 0/1/2 staging directly from the clock, so
+/// it's always correct regardless of notification taps:
+///   0 → before the scheduled time, or up to 10 min after it
+///   1 → from 10 min after the scheduled time, up to 20 min after it (Follow-Up window)
+///   2 → 20 min or more after the scheduled time                     (Final window)
+///
+/// Callers should combine this with the persisted (tap-driven) stage via
+/// `max()` so an earlier tap is never "downgraded", while still correctly
+/// advancing even when no tap ever happens.
+int _wallClockStage(int hour, int minute, String period, DateTime date) {
+  if (_isPastDate(date)) return 2;
+  if (!_isToday(date)) return 0;
+  final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
+  final scheduled = DateTime(date.year, date.month, date.day, h24, minute);
+  final now = DateTime.now();
+  if (now.isBefore(scheduled)) return 0;
+  final elapsed = now.difference(scheduled);
+  if (elapsed < const Duration(minutes: 10)) return 0;
+  if (elapsed < const Duration(minutes: 20)) return 1;
+  return 2;
 }
 
 /// One concrete, mark-able dose: a medication paired with one of its
@@ -770,13 +822,25 @@ class _MedCardState extends State<_MedCard> {
     if (old.status != widget.status) _localStatus = widget.status;
   }
 
+  /// Refreshes [_alertStage] from BOTH:
+  ///   • the persisted, tap-driven stage in SharedPreferences (set by
+  ///     NotificationService.onAlarmFired when a notification is tapped), and
+  ///   • a purely wall-clock-derived stage (see _wallClockStage above), which
+  ///     advances correctly even if the patient never taps a notification.
+  /// We take the larger of the two so a tap is never "undone", while the
+  /// Mark-As sheet still correctly shows "Taken Late" once 10 minutes have
+  /// passed and auto-skip behavior once 20 minutes have passed — regardless
+  /// of whether the OS notification was ever tapped.
   Future<void> _refreshStage() async {
     if (!_isToday(widget.selectedDate)) return;
-    final stage = await _notifService.getAlertStage(
+    final persisted = await _notifService.getAlertStage(
       widget.med.id ?? widget.med.name,
       timeIndex: widget.timeIndex,
     );
-    if (mounted) setState(() => _alertStage = stage);
+    final wallClock = _wallClockStage(
+      widget.hour, widget.minute, widget.period, widget.selectedDate);
+    final effective = persisted > wallClock ? persisted : wallClock;
+    if (mounted) setState(() => _alertStage = effective);
   }
 
   MedicationModel get med => widget.med;

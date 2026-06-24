@@ -5,17 +5,20 @@
 //   Stage 0 — First Reminder  (at scheduled time, repeats daily via matchDateTimeComponents)
 //     • Sound: alarm_sound.wav, DND bypass, fullScreenIntent
 //     • Only "Taken" is the active action in-app.
-//     • When it fires → schedules Stage 1 as a ONE-SHOT alarm (+10 min).
 //
 //   Stage 1 — Follow-Up Alarm (+10 min, ONE-SHOT — only if dose still unmarked)
-//     • Scheduled by onAlarmFired(stage:0) at the moment stage 0 fires.
+//     • Pre-scheduled at the same time as Stage 0 (see "Why pre-schedule"
+//       below) — NOT chained from onAlarmFired, since that callback only
+//       fires when a notification is TAPPED, not when it's delivered.
 //     • Same sound / channel.
 //     • Only "Taken Late" is the active action in-app.
-//     • When it fires → schedules Stage 2 as a ONE-SHOT alarm (+10 more min).
 //
 //   Stage 2 — Final Alarm (+20 min total, ONE-SHOT)
 //     • Dose is automatically written to Firestore as 'skipped' ONLY IF it
-//       hasn't already been marked 'taken' or 'taken_late'.
+//       hasn't already been marked 'taken' or 'taken_late'. (patient_home.dart
+//       also independently auto-records 'skipped' purely from wall-clock time
+//       once the window closes, so this happens even if the OS notification
+//       itself was never tapped.)
 //     • Patient may still change it to 'taken_late' later that day.
 //
 // Why one-shot for stages 1 & 2?
@@ -24,24 +27,52 @@
 //     1. Cancellation unreliability — Android's AlarmManager sometimes fails
 //        to cancel an exact repeating alarm that is actively firing.
 //     2. Stage 1/2 would fire EVERY day, not just the day the dose was missed.
-//   Scheduling stages 1 & 2 as one-shot alarms triggered by the previous
-//   stage firing means they are created fresh each time, cancel reliably
-//   (they are brand new alarms at creation time), and automatically stop
-//   when the patient marks the dose.
+//   Scheduling stages 1 & 2 as one-shot alarms tied to the same base
+//   occurrence as Stage 0 means they cancel reliably and automatically stop
+//   firing once the patient marks the dose.
 //
-// How stage escalation works:
-//   onAlarmFired(stage: 0) → scheduleNextStage(1, +10 min)
-//   onAlarmFired(stage: 1) → scheduleNextStage(2, +10 more min)
-//   onAlarmFired(stage: 2) → check Firestore; if unmarked → write 'skipped'
+// ── Bug fix: Follow-Up (+10) and Final (+20) alarms silently disappearing ──
 //
-// When patient marks taken/taken_late:
-//   cancelSlotStages() cancels all three IDs for that slot. Since stages 1 & 2
-//   are one-shot and were just recently created, cancel() is guaranteed to
-//   remove them before they fire.
+//   _scheduleAllStages() is re-invoked far more often than once: every time
+//   the app cold-starts, _scheduleRemindersIfChanged()'s in-memory signature
+//   guard resets to null, so it re-schedules on the very next Firestore
+//   snapshot even though nothing about the medication changed. The OLD logic
+//   computed the "next occurrence" of a dose's time-of-day by simply checking
+//   "has today's wall-clock time already passed?" — and if so, rolled the
+//   anchor straight to TOMORROW. That's correct for Stage 0 (which only cares
+//   about time-of-day via matchDateTimeComponents), but it was also being
+//   used as the anchor for Stage 1 (+10) and Stage 2 (+20), which are
+//   absolute one-shot alarms. The result: re-opening the app at any point
+//   after the scheduled time — even 1 minute after, i.e. while today's
+//   Follow-Up/Final window was still legitimately running — rolled the Stage
+//   1/2 anchor to tomorrow and silently overwrote today's still-pending
+//   Follow-Up and Final one-shots with tomorrow's times. Today's alarms then
+//   simply never fired.
+//
+//   Fix: the anchor only rolls to tomorrow once today's full 20-minute alarm
+//   window (scheduled time → scheduled time + 20 min) has actually elapsed.
+//   Re-invoking this method while inside that window now recomputes the SAME
+//   today's Stage 1/2 times (idempotent), instead of clobbering them. Each
+//   stage is additionally only (re)scheduled if its target time is still in
+//   the future, so a re-invocation mid-window can't accidentally re-fire a
+//   stage whose moment has already passed.
+//
+//   The one exception is cancelSlotStages() (called the moment the patient
+//   marks a dose taken/taken_late): there we WANT to jump straight to
+//   tomorrow's occurrence regardless of whether today's window has elapsed,
+//   since today's dose is already resolved. That call passes
+//   forceNextDay: true to bypass the window check.
+//
+//   This fix applies per intake-time slot independently, so it also covers
+//   medications with multiple intake times per day (each slot gets its own
+//   correctly-anchored Stage 0/1/2 trio).
 //
 // Alert stage is persisted in SharedPreferences as
 //   notif_stage_{medId}_{timeIndex} → 0 | 1 | 2
-// so patient_home.dart can read it to decide which buttons to enable.
+// via onAlarmFired(), but that only updates when a notification is TAPPED.
+// patient_home.dart therefore also derives an equivalent stage purely from
+// wall-clock time and takes the max of the two, so the Mark-As sheet shows
+// the right buttons even if the patient never taps the alarm.
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -434,6 +465,15 @@ class NotificationService {
   /// Stages 1 and 2 are cancelled immediately when the patient marks the dose.
   /// Stage 0 is cancelled to prevent next-day re-firing after the medication
   /// reaches its stop date (handled by _scheduleRemindersIfChanged).
+  ///
+  /// [forceNextDay] — when true, skips the "is today's window still open"
+  /// check and anchors straight to tomorrow's occurrence. Used exclusively by
+  /// cancelSlotStages() right after the patient marks a dose, since at that
+  /// point today's dose is resolved and we explicitly want tomorrow's alarms
+  /// queued up. All other callers should leave this false so that
+  /// re-invoking this method while today's 20-minute window is still open
+  /// (e.g. on app cold start) recomputes the SAME today's Stage 1/2 times
+  /// instead of clobbering them with tomorrow's.
   Future<void> _scheduleAllStages({
     required String medId,
     required String medName,
@@ -442,15 +482,35 @@ class NotificationService {
     required int    hour,
     required int    minute,
     required String period,
-    int timeIndex = 0,
+    int  timeIndex = 0,
+    bool forceNextDay = false,
   }) async {
     await init();
     if (!await isPatientEnabled()) return;
 
     final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
-    final now  = tz.TZDateTime.now(tz.local);
-    var base   = tz.TZDateTime(tz.local, now.year, now.month, now.day, h24, minute);
-    if (base.isBefore(now)) base = base.add(const Duration(days: 1));
+    final now = tz.TZDateTime.now(tz.local);
+    final todayBase =
+        tz.TZDateTime(tz.local, now.year, now.month, now.day, h24, minute);
+
+    // Stage 0's anchor: unchanged from the original (already-working) logic
+    // — always the next future occurrence of the time-of-day. This is only
+    // used as a seed for matchDateTimeComponents.time (a daily repeat), so
+    // it must stay in the future; the plugin resolves the actual next match
+    // from it regardless of which date we pass.
+    final stage0Base =
+        todayBase.isBefore(now) ? todayBase.add(const Duration(days: 1)) : todayBase;
+
+    // Stage 1/2's anchor: anchor to TODAY as long as today's full 20-minute
+    // alarm window (scheduled time → scheduled time + 20 min) hasn't elapsed
+    // yet — see the file-header "Bug fix" note for why this matters. Once
+    // that window has closed (or when explicitly forced via [forceNextDay]),
+    // roll forward to tomorrow's occurrence instead.
+    final todayWindowEnd = todayBase.add(const Duration(minutes: 20));
+    final rollToTomorrow = forceNextDay || now.isAfter(todayWindowEnd);
+    final base = rollToTomorrow
+        ? todayBase.add(const Duration(days: 1))
+        : todayBase;
 
     final timeLabel =
         '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')} $period';
@@ -461,7 +521,7 @@ class NotificationService {
       _stageId(medId, 0, timeIndex),
       '💊 Time for $medName',
       '$doseLabel — scheduled at $timeLabel',
-      base,
+      stage0Base,
       await _alarmDetails(stage: 0, medName: medName),
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
@@ -471,45 +531,69 @@ class NotificationService {
     );
 
     // ── Stage 1: one-shot +10 min ─────────────────────────────────────────
-    // base here is already the NEXT future occurrence (today or tomorrow).
-    // Stage 1 fires +10 min after that exact fire, so it is also one-shot
-    // from the same base + 10 min. It does NOT use matchDateTimeComponents
-    // so it fires exactly once. After a patient marks the dose, this alarm
-    // is cancelled — it will not fire again until the patient opens the app
-    // again on the next day and _scheduleRemindersIfChanged re-creates it.
+    // [base] (the window-aware anchor, see above) stays pinned to TODAY for
+    // as long as today's 20-minute window is still open, so re-invoking this
+    // method mid-window (e.g. app re-opened after the alarm already fired)
+    // recomputes the SAME today's stage1Time instead of pushing it to
+    // tomorrow. We additionally only actually (re)schedule it if the target
+    // is still in the future — if stage1Time has already passed (we're
+    // currently inside the +10..+20 min window), there's nothing useful to
+    // (re)schedule; it already fired (or should have) and we must not
+    // re-trigger it or throw scheduling a past time.
     final stage1Time = base.add(const Duration(minutes: 10));
-    await _plugin.zonedSchedule(
-      _stageId(medId, 1, timeIndex),
-      '⏰ Reminder: $medName',
-      "You haven't marked $medName as taken yet.",
-      stage1Time,
-      await _alarmDetails(stage: 1, medName: medName),
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      // NO matchDateTimeComponents — one-shot only.
-      payload: 'stage:1:$medId:$timeIndex:${dose.toString()}:$unit',
-    );
+    if (stage1Time.isAfter(now)) {
+      await _plugin.zonedSchedule(
+        _stageId(medId, 1, timeIndex),
+        '⏰ Reminder: $medName',
+        "You haven't marked $medName as taken yet.",
+        stage1Time,
+        await _alarmDetails(stage: 1, medName: medName),
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // NO matchDateTimeComponents — one-shot only.
+        payload: 'stage:1:$medId:$timeIndex:${dose.toString()}:$unit',
+      );
+    } else {
+      debugPrint('[NotificationService] Stage 1 target for $medId slot '
+          '$timeIndex already passed ($stage1Time) — leaving as-is, not '
+          're-scheduling.');
+    }
 
     // ── Stage 2: one-shot +20 min ─────────────────────────────────────────
+    // Same future-only guard as Stage 1 above.
     final stage2Time = base.add(const Duration(minutes: 20));
-    await _plugin.zonedSchedule(
-      _stageId(medId, 2, timeIndex),
-      '⚠️ Final Alert: $medName',
-      '$medName ($doseLabel) has been recorded as a missed dose.',
-      stage2Time,
-      await _alarmDetails(stage: 2, medName: medName),
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      // NO matchDateTimeComponents — one-shot only.
-      payload: 'stage:2:$medId:$timeIndex:${dose.toString()}:$unit',
-    );
+    if (stage2Time.isAfter(now)) {
+      await _plugin.zonedSchedule(
+        _stageId(medId, 2, timeIndex),
+        '⚠️ Final Alert: $medName',
+        '$medName ($doseLabel) has been recorded as a missed dose.',
+        stage2Time,
+        await _alarmDetails(stage: 2, medName: medName),
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        // NO matchDateTimeComponents — one-shot only.
+        payload: 'stage:2:$medId:$timeIndex:${dose.toString()}:$unit',
+      );
+    } else {
+      debugPrint('[NotificationService] Stage 2 target for $medId slot '
+          '$timeIndex already passed ($stage2Time) — leaving as-is, not '
+          're-scheduling.');
+    }
 
-    await resetAlertStage(medId, timeIndex: timeIndex);
+    // Only reset the persisted alert stage when we're actually anchoring to
+    // a FRESH occurrence (tomorrow, or an explicit force). If we're simply
+    // re-invoked mid-window while still anchored to today, resetting here
+    // would wipe out a tap-recorded stage (from onAlarmFired) even though
+    // the dose's alarm cycle for today hasn't actually restarted.
+    if (rollToTomorrow) {
+      await resetAlertStage(medId, timeIndex: timeIndex);
+    }
 
-    debugPrint('[NotificationService] All 3 stages scheduled for $medName '
-        '(slot $timeIndex) at $timeLabel, +10min, +20min');
+    debugPrint('[NotificationService] Stages scheduled for $medName '
+        '(slot $timeIndex) — base=$base, stage1=$stage1Time, '
+        'stage2=$stage2Time, forceNextDay=$forceNextDay');
   }
 
   /// Called when an alarm fires (via notification tap or background handler).
@@ -570,15 +654,12 @@ class NotificationService {
   /// so they don't fire after the patient has already acted.
   ///
   /// Stage 0 (daily repeat) is left running so next-day scheduling continues
-  /// automatically. Stage 1 and Stage 2 will be re-created fresh by
-  /// _scheduleAllStages() the next time the signature guard in
-  /// _scheduleRemindersIfChanged() detects a new day's schedule.
-  ///
-  /// However, since Stage 1 and Stage 2 are one-shot alarms tied to TODAY'S
-  /// base time, we need to re-schedule them for TOMORROW's base time right
-  /// now — otherwise next day's +10/+20 min alarms won't exist.
-  /// We do this by calling _scheduleAllStages() with the known hour/minute
-  /// so it computes tomorrow as the next future base and creates fresh alarms.
+  /// automatically. Stage 1 and Stage 2 are re-created fresh here, anchored
+  /// explicitly to TOMORROW's occurrence via forceNextDay: true — since the
+  /// patient just resolved today's dose, we always want the next cycle
+  /// queued up for tomorrow regardless of how much of today's 20-minute
+  /// window has elapsed (which is what _scheduleAllStages would otherwise
+  /// use to decide whether to stay anchored to today).
   Future<void> cancelSlotStages(String medId, int timeIndex,
       {String medName = '',
       double dose = 1.0,
@@ -599,14 +680,15 @@ class NotificationService {
     // and Stage 2 one-shots pointing at tomorrow's base + 10/20 min.
     if (medName.isNotEmpty) {
       await _scheduleAllStages(
-        medId:     medId,
-        medName:   medName,
-        dose:      dose,
-        unit:      unit,
-        hour:      hour,
-        minute:    minute,
-        period:    period,
-        timeIndex: timeIndex,
+        medId:        medId,
+        medName:      medName,
+        dose:         dose,
+        unit:         unit,
+        hour:         hour,
+        minute:       minute,
+        period:       period,
+        timeIndex:    timeIndex,
+        forceNextDay: true,
       );
       debugPrint('[NotificationService] Rescheduled all stages for next occurrence '
           '$medId slot $timeIndex');
