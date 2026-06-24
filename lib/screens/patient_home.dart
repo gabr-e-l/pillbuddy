@@ -110,6 +110,30 @@ bool _isToday(DateTime date) {
       date.day == now.day;
 }
 
+/// True when [date] is exactly one calendar day before today.
+bool _isYesterday(DateTime date) {
+  final yesterday = DateTime.now().subtract(const Duration(days: 1));
+  return date.year == yesterday.year &&
+      date.month == yesterday.month &&
+      date.day == yesterday.day;
+}
+
+/// True when [date] is neither today nor yesterday — i.e. one of the
+/// greyed-out "Upcoming Days" / "Previous Days" in the calendar carousel,
+/// for which the dose list is view-only (Mark-As buttons disabled).
+bool _isRestrictedDay(DateTime date) => !_isToday(date) && !_isYesterday(date);
+
+/// True when [date] is today AND the dose's scheduled time (its first
+/// alarm) has not arrived yet. While true, that dose's "Mark as" button
+/// stays locked — a patient cannot mark a dose before it's actually due.
+bool _isBeforeScheduledTime(
+    int hour, int minute, String period, DateTime date) {
+  if (!_isToday(date)) return false;
+  final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
+  final scheduled = DateTime(date.year, date.month, date.day, h24, minute);
+  return DateTime.now().isBefore(scheduled);
+}
+
 /// True when the 20-minute alarm window for a dose scheduled at
 /// [hour]/[minute]/[period] on [date] has elapsed.
 ///
@@ -416,41 +440,54 @@ class _TodayTabState extends State<_TodayTab> {
           final day        = _calendarDays[i];
           final isSelected = _isSameDay(day, _selectedDate);
           final isToday    = _isSameDay(day, DateTime.now());
+          // "Upcoming Days" and "Previous Days" (everything except Today and
+          // Yesterday) are greyed-out in the carousel — they can still be
+          // tapped to view that day's medications, but the dose list shown
+          // for them is view-only (see _MedCard's isRestrictedDay).
+          final isRestricted = _isRestrictedDay(day);
           return GestureDetector(
             onTap: () => setState(() => _selectedDate = day),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 200),
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              width: 48,
-              decoration: BoxDecoration(
-                color: isSelected ? primary : surface,
-                borderRadius: BorderRadius.circular(12),
-                border: isToday && !isSelected
-                    ? Border.all(color: primary, width: 1.5)
-                    : null,
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    _weekdayLabel(day),
-                    style: TextStyle(
-                      // Clamp the weekday label to a fixed small size so it
-                      // never stretches the card at XL font scale.
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: isSelected
-                          ? Colors.white70
-                          : onSurface.withOpacity(0.45),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text('${day.day}',
+            child: Opacity(
+              opacity: (isRestricted && !isSelected) ? 0.45 : 1.0,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                margin: const EdgeInsets.symmetric(horizontal: 4),
+                width: 48,
+                decoration: BoxDecoration(
+                  color: isSelected ? primary : surface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: isToday && !isSelected
+                      ? Border.all(color: primary, width: 1.5)
+                      : null,
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _weekdayLabel(day),
                       style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: isSelected ? Colors.white : onSurface)),
-                ],
+                        // Clamp the weekday label to a fixed small size so it
+                        // never stretches the card at XL font scale.
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: isSelected
+                            ? Colors.white70
+                            : onSurface.withOpacity(
+                                isRestricted ? 0.3 : 0.45),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text('${day.day}',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: isSelected
+                                ? Colors.white
+                                : (isRestricted
+                                    ? onSurface.withOpacity(0.35)
+                                    : onSurface))),
+                  ],
+                ),
               ),
             ),
           );
@@ -625,6 +662,7 @@ class _TodayTabState extends State<_TodayTab> {
                   period:       slot.period,
                   status:       status,
                   selectedDate: selectedDate,
+                  isRestrictedDay: _isRestrictedDay(selectedDate),
                   onStatusChanged: (newStatus) async {
                     // When the patient actively sets a status (especially
                     // 'taken_late' to correct an auto-skip), remove the
@@ -785,6 +823,11 @@ class _MedCard extends StatefulWidget {
   final String                         period;
   final String?                        status;
   final DateTime                       selectedDate;
+  // True when selectedDate is an "Upcoming Day" or "Previous Day" (i.e.
+  // neither Today nor Yesterday) in the calendar carousel. The dose's
+  // content is still shown, but greyed-out and view-only — its Mark-As
+  // button is disabled.
+  final bool                            isRestrictedDay;
   final Future<void> Function(String?) onStatusChanged;
 
   const _MedCard({
@@ -795,6 +838,7 @@ class _MedCard extends StatefulWidget {
     required this.period,
     required this.status,
     required this.selectedDate,
+    required this.isRestrictedDay,
     required this.onStatusChanged,
   });
 
@@ -847,6 +891,18 @@ class _MedCardState extends State<_MedCard> {
 
   bool get _windowExpired =>
       _isWindowExpired(widget.hour, widget.minute, widget.period, widget.selectedDate);
+
+  // True only on Today, before this specific dose's scheduled time (its
+  // first alarm) has arrived. While true, the "Mark as" button for THIS
+  // dose stays locked — a patient cannot mark a dose before it's due, even
+  // though earlier/later doses the same day may already be actionable.
+  bool get _doseLocked => _isBeforeScheduledTime(
+      widget.hour, widget.minute, widget.period, widget.selectedDate);
+
+  // Combines the day-level restriction (Upcoming/Previous Days are
+  // view-only) with the dose-level "not due yet" lock (Today, before the
+  // scheduled time) into a single flag that gates the Mark-As button.
+  bool get _markAsLocked => widget.isRestrictedDay || _doseLocked;
 
   // If the patient already marked as 'taken' on time, nothing is "expired"
   // from their perspective — suppress all the warning/skipped UI.
@@ -1063,7 +1119,9 @@ class _MedCardState extends State<_MedCard> {
                 : null,
       ),
       child: Opacity(
-        opacity: (_windowExpired && _localStatus == null) ? 0.75 : 1.0,
+        opacity: widget.isRestrictedDay
+            ? 0.45
+            : (_windowExpired && _localStatus == null) ? 0.75 : 1.0,
         child: Row(
           children: [
             SizedBox(
@@ -1121,11 +1179,15 @@ class _MedCardState extends State<_MedCard> {
               ),
             ),
             GestureDetector(
-              onTap: _saving ? null : () => _showActionSheet(context),
+              onTap: (_saving || _markAsLocked)
+                  ? null
+                  : () => _showActionSheet(context),
               child: Container(
                 padding: EdgeInsets.symmetric(horizontal: btnH, vertical: btnV),
                 decoration: BoxDecoration(
-                  color: _statusColor.withOpacity(0.12),
+                  color: _markAsLocked
+                      ? onSurface.withOpacity(0.08)
+                      : _statusColor.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: _saving
@@ -1137,7 +1199,9 @@ class _MedCardState extends State<_MedCard> {
                         style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w700,
-                            color: _statusColor)),
+                            color: _markAsLocked
+                                ? onSurface.withOpacity(0.35)
+                                : _statusColor)),
               ),
             ),
           ],
