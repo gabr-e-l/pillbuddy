@@ -512,6 +512,48 @@ class NotificationService {
         ? todayBase.add(const Duration(days: 1))
         : todayBase;
 
+    // ── Bug fix: Stage 1/2 firing even after the dose was already marked ──
+    //
+    //   _scheduleAllStages() can be re-invoked while still anchored to TODAY
+    //   (rollToTomorrow == false) for reasons that have nothing to do with
+    //   today's dose actually being unresolved — most notably, app cold
+    //   start resets patient_home's in-memory signature guard, so this
+    //   method runs again even though the patient already marked today's
+    //   dose as 'taken' a moment (or hours) earlier, well inside today's
+    //   20-minute window. Without this check, that re-invocation would
+    //   blindly re-schedule fresh Stage 1 (+10) and Stage 2 (+20) one-shots
+    //   for today, undoing the cancellation cancelSlotStages() already
+    //   performed when the dose was marked.
+    //
+    //   Fix: whenever we're anchored to TODAY, check Firestore first. If
+    //   today's slot is already 'taken' or 'taken_late', skip scheduling
+    //   Stage 1/2 entirely for today — only Stage 0 (the daily repeat,
+    //   already-idempotent) gets (re)scheduled. We don't need to do this
+    //   check when rollToTomorrow is true, since tomorrow's dose can't have
+    //   been marked yet.
+    bool alreadyResolvedToday = false;
+    if (!rollToTomorrow) {
+      try {
+        final existing = await IntakeService().getIntakeStatus(
+          medId:     medId,
+          timeIndex: timeIndex,
+          date:      DateTime.now(),
+        );
+        alreadyResolvedToday = existing == 'taken' || existing == 'taken_late';
+      } catch (e) {
+        debugPrint('[NotificationService] Pre-schedule status check failed '
+            'for $medId slot $timeIndex: $e');
+      }
+      if (alreadyResolvedToday) {
+        // Defensive: make sure no stale one-shots are left pending for
+        // today even if a prior cancellation somehow missed them.
+        await _plugin.cancel(_stageId(medId, 1, timeIndex));
+        await _plugin.cancel(_stageId(medId, 2, timeIndex));
+        debugPrint('[NotificationService] $medId slot $timeIndex already '
+            'resolved today — skipping Stage 1/2 (re)scheduling.');
+      }
+    }
+
     final timeLabel =
         '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')} $period';
     final doseLabel = '${dose % 1 == 0 ? dose.toInt() : dose} $unit';
@@ -541,7 +583,7 @@ class NotificationService {
     // (re)schedule; it already fired (or should have) and we must not
     // re-trigger it or throw scheduling a past time.
     final stage1Time = base.add(const Duration(minutes: 10));
-    if (stage1Time.isAfter(now)) {
+    if (!alreadyResolvedToday && stage1Time.isAfter(now)) {
       await _plugin.zonedSchedule(
         _stageId(medId, 1, timeIndex),
         '⏰ Reminder: $medName',
@@ -563,7 +605,7 @@ class NotificationService {
     // ── Stage 2: one-shot +20 min ─────────────────────────────────────────
     // Same future-only guard as Stage 1 above.
     final stage2Time = base.add(const Duration(minutes: 20));
-    if (stage2Time.isAfter(now)) {
+    if (!alreadyResolvedToday && stage2Time.isAfter(now)) {
       await _plugin.zonedSchedule(
         _stageId(medId, 2, timeIndex),
         '⚠️ Final Alert: $medName',
