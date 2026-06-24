@@ -13,6 +13,12 @@ class MedicationModel {
   final DateTime? stopDate;
   final List<Map<String, dynamic>> intakeTimes;
 
+  /// For freqUnit == 'Hour': the absolute datetime of the very first dose.
+  /// Used to compute which dose times fall on any given calendar date by
+  /// counting forward in [freqNumber]-hour steps from this anchor.
+  /// Null for non-Hour frequencies.
+  final DateTime? firstDoseDateTime;
+
   /// For freqUnit == 'Week': list of weekday ints (1=Mon … 7=Sun, per DateTime.weekday)
   final List<int> selectedWeekDays;
 
@@ -40,6 +46,7 @@ class MedicationModel {
     this.startingDate,
     this.stopDate,
     List<Map<String, dynamic>>? intakeTimes,
+    this.firstDoseDateTime,
     List<int>? selectedWeekDays,
     List<int>? selectedMonthDays,
     required this.hour,
@@ -67,6 +74,9 @@ class MedicationModel {
           startingDate != null ? Timestamp.fromDate(startingDate!) : null,
       'stopDate': stopDate != null ? Timestamp.fromDate(stopDate!) : null,
       'intakeTimes': intakeTimes,
+      'firstDoseDateTime': firstDoseDateTime != null
+          ? Timestamp.fromDate(firstDoseDateTime!)
+          : null,
       'selectedWeekDays': selectedWeekDays,
       'selectedMonthDays': selectedMonthDays,
       'hour': hour,
@@ -115,6 +125,9 @@ class MedicationModel {
           ? (data['stopDate'] as Timestamp).toDate()
           : null,
       intakeTimes: times,
+      firstDoseDateTime: data['firstDoseDateTime'] != null
+          ? (data['firstDoseDateTime'] as Timestamp).toDate()
+          : null,
       selectedWeekDays: weekDays,
       selectedMonthDays: monthDays,
       hour: data['hour'] ?? 8,
@@ -174,8 +187,89 @@ class MedicationModel {
       return selectedMonthDays.contains(date.day);
     }
 
-    // Hour / Day — active every day within the date range
+    // Hour — active on any date within range that has at least one dose.
+    // (The actual slot computation is in doseSlotsForDate.)
+    if (freqUnit == 'Hour') {
+      return doseSlotsForDate(date).isNotEmpty;
+    }
+
+    // Day — active every day within the date range
     return true;
+  }
+
+  /// For 'Hour' frequency: computes the list of intake-time maps
+  /// {'hour','minute','period','slotIndex'} that fall on [date].
+  ///
+  /// Starting from [firstDoseDateTime] (or startingDate + legacy hour/minute
+  /// as fallback), we step forward by [freqNumber] hours until we pass
+  /// midnight of the next day (or stopDate, whichever comes first).
+  /// Only steps whose date matches [date] are returned.
+  ///
+  /// This makes the schedule continuous across day boundaries:
+  ///   First dose 1:41 AM June 24, every 5 h, stop June 25:
+  ///     June 24 → 01:41, 06:41, 11:41, 16:41, 21:41
+  ///     June 25 → 02:41, 07:41, 12:41, 17:41, 22:41  (then stop date ends it)
+  ///
+  /// Returns [] for non-Hour frequencies (caller should use intakeTimes instead).
+  List<Map<String, dynamic>> doseSlotsForDate(DateTime date) {
+    if (freqUnit != 'Hour') return [];
+
+    // Anchor: firstDoseDateTime if available, else startingDate + legacy time.
+    DateTime anchor;
+    if (firstDoseDateTime != null) {
+      anchor = firstDoseDateTime!;
+    } else if (startingDate != null) {
+      // Legacy: reconstruct absolute anchor from startingDate + legacy h/m/period
+      final h24 = hour % 12 + (period == 'PM' ? 12 : 0);
+      anchor = DateTime(
+          startingDate!.year, startingDate!.month, startingDate!.day,
+          h24, minute);
+    } else {
+      // No anchor at all — fall back to intakeTimes (old behaviour)
+      return [];
+    }
+
+    // We need the stop boundary: midnight at end of stopDate, or far future.
+    final stopBoundary = stopDate != null
+        ? DateTime(stopDate!.year, stopDate!.month, stopDate!.day, 23, 59, 59)
+        : DateTime(9999, 12, 31);
+
+    // Window: midnight-to-midnight for [date]
+    final dayStart = DateTime(date.year, date.month, date.day, 0, 0, 0);
+    final dayEnd   = DateTime(date.year, date.month, date.day, 23, 59, 59);
+
+    final intervalMinutes = freqNumber * 60;
+
+    // How many steps from anchor to dayStart (round down)?
+    final toStart = dayStart.difference(anchor).inMinutes;
+    // Start stepping from the first dose ON or AFTER dayStart.
+    // If anchor is already after dayEnd, return empty.
+    if (anchor.isAfter(dayEnd)) return [];
+
+    // First step index that lands on or after dayStart
+    final firstStep = toStart <= 0 ? 0 : (toStart / intervalMinutes).ceil();
+
+    final slots = <Map<String, dynamic>>[];
+    int slotIndex = firstStep;
+    while (true) {
+      final doseTime =
+          anchor.add(Duration(minutes: slotIndex * intervalMinutes));
+      if (doseTime.isAfter(dayEnd)) break;
+      if (doseTime.isAfter(stopBoundary)) break;
+      if (!doseTime.isBefore(dayStart)) {
+        final h24 = doseTime.hour;
+        final dp  = h24 < 12 ? 'AM' : 'PM';
+        final dh12 = h24 % 12 == 0 ? 12 : h24 % 12;
+        slots.add({
+          'hour':      dh12,
+          'minute':    doseTime.minute,
+          'period':    dp,
+          'slotIndex': slotIndex, // global step index (unique per dose ever)
+        });
+      }
+      slotIndex++;
+    }
+    return slots;
   }
 
   MedicationModel copyWith({
@@ -189,6 +283,7 @@ class MedicationModel {
     DateTime? startingDate,
     DateTime? stopDate,
     List<Map<String, dynamic>>? intakeTimes,
+    DateTime? firstDoseDateTime,
     List<int>? selectedWeekDays,
     List<int>? selectedMonthDays,
     int? hour,
@@ -210,6 +305,7 @@ class MedicationModel {
       startingDate: startingDate ?? this.startingDate,
       stopDate: stopDate ?? this.stopDate,
       intakeTimes: intakeTimes ?? this.intakeTimes,
+      firstDoseDateTime: firstDoseDateTime ?? this.firstDoseDateTime,
       selectedWeekDays: selectedWeekDays ?? this.selectedWeekDays,
       selectedMonthDays: selectedMonthDays ?? this.selectedMonthDays,
       hour: hour ?? this.hour,

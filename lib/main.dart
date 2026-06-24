@@ -6,12 +6,21 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'providers/accessibility_provider.dart';
 import 'providers/caregiver_accessibility_provider.dart';
 import 'screens/splash_screen.dart';
 import 'services/notification_service.dart';
+
+/// Top-level background notification handler.
+/// Must be a plain top-level function (not a class method) annotated with
+/// @pragma('vm:entry-point') so the AOT compiler keeps it.
+@pragma('vm:entry-point')
+void notificationBackgroundHandler(NotificationResponse response) {
+  NotificationService.handleBackground(response);
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

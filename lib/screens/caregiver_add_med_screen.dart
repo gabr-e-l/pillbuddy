@@ -140,6 +140,9 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
 
   void _syncDayFrequency() {
     if (_freqUnit != 'Day' && _freqUnit != 'Hour') return;
+    // For 'Hour', only one time picker is shown (the first dose time).
+    // The full intake times list is computed at save time from that first
+    // dose + the interval. For 'Day', show one picker per dose.
     final needed = _freqUnit == 'Hour' ? 1 : _freqNumber;
     while (_intakeTimes.length < needed) {
       _intakeTimes.add({'hour': 8, 'minute': 0, 'period': 'AM'});
@@ -147,6 +150,35 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
     if (_intakeTimes.length > needed) {
       _intakeTimes = _intakeTimes.sublist(0, needed);
     }
+  }
+
+  /// For 'Hour' frequency, generate the full list of intake times by
+  /// repeatedly adding [_freqNumber] hours starting from the first dose time,
+  /// covering all doses that fit within a 24-hour window from the first dose.
+  List<Map<String, dynamic>> _buildHourIntakeTimes() {
+    final first  = _intakeTimes[0];
+    final h12    = first['hour']   as int;
+    final minute = first['minute'] as int;
+    final period = first['period'] as String;
+
+    // Convert first dose to 24-hour minutes-from-midnight
+    final h24            = h12 % 12 + (period == 'PM' ? 12 : 0);
+    final startMinutes   = h24 * 60 + minute;
+    final intervalMins   = _freqNumber * 60;
+    // Include every dose whose offset from the first dose is < 24 hours.
+    // ceil gives the correct count: e.g. 24/5 = 4.8 → 5 doses (not 4).
+    final dosesPerDay    = (24 / _freqNumber).ceil().clamp(1, 24);
+
+    final times = <Map<String, dynamic>>[];
+    for (int i = 0; i < dosesPerDay; i++) {
+      final totalMin = (startMinutes + i * intervalMins) % (24 * 60);
+      final dh24  = totalMin ~/ 60;
+      final dm    = totalMin % 60;
+      final dp    = dh24 < 12 ? 'AM' : 'PM';
+      final dh12  = dh24 % 12 == 0 ? 12 : dh24 % 12;
+      times.add({'hour': dh12, 'minute': dm, 'period': dp, 'slotIndex': i});
+    }
+    return times;
   }
 
   List<Map<String, dynamic>> _buildIntakeTimesForSave() {
@@ -158,6 +190,8 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
           .toList();
     }
     if (_freqUnit == 'Month') return [Map.from(_monthTime)];
+    // For Hour, compute all times from the first dose + interval.
+    if (_freqUnit == 'Hour') return _buildHourIntakeTimes();
     return _intakeTimes;
   }
 
@@ -347,7 +381,22 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
           ? _selectedWeekDays.length
           : _freqUnit == 'Month'
               ? _selectedMonthDays.length
-              : _freqNumber;
+              : _freqNumber; // For Hour: this IS the interval (e.g. 3 = every 3 hours)
+
+      // For 'Hour' frequency, compute the absolute firstDoseDateTime so the
+      // patient home can calculate continuous cross-day dose slots.
+      // Anchor = startDate (or today) at the first-dose hour:minute.
+      DateTime? firstDoseDateTime;
+      if (_freqUnit == 'Hour') {
+        final anchorDate = _startDate ?? DateTime.now();
+        final first = _intakeTimes[0];
+        final fh12   = first['hour']   as int;
+        final fmin   = first['minute'] as int;
+        final fper   = first['period'] as String;
+        final fh24   = fh12 % 12 + (fper == 'PM' ? 12 : 0);
+        firstDoseDateTime = DateTime(
+            anchorDate.year, anchorDate.month, anchorDate.day, fh24, fmin);
+      }
 
       final med = MedicationModel(
         id:               widget.existingMed?.id,
@@ -360,6 +409,7 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
         startingDate:     _startDate,
         stopDate:         _stopDate,
         intakeTimes:      times,
+        firstDoseDateTime: firstDoseDateTime,
         selectedWeekDays: _selectedWeekDays,
         selectedMonthDays: _selectedMonthDays,
         hour:             primary['hour']   as int,
@@ -626,7 +676,7 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
 
                 // ── Time section ──────────────────────────────────────
                 ..._buildTimeSection(
-                    cardColor, labelColor, onSurface, cs),
+                    cardColor, labelColor, sublabelColor, onSurface, cs),
 
                 const SizedBox(height: 20),
 
@@ -945,19 +995,29 @@ class _CaregiverAddMedScreenState extends State<CaregiverAddMedScreen> {
   // ── Time section ──────────────────────────────────────────────────────────
 
   List<Widget> _buildTimeSection(Color cardColor, Color labelColor,
-      Color onSurface, ColorScheme cs) {
+      Color sublabelColor, Color onSurface, ColorScheme cs) {
     switch (_freqUnit) {
       case 'Hour':
+        // Preview the computed schedule so the caregiver can confirm
+        // the times before saving.
+        final preview = _buildHourIntakeTimes();
+        final previewStr = preview.length <= 4
+            ? preview.map((t) => _timeLabel(t)).join(', ')
+            : '${preview.sublist(0, 3).map((t) => _timeLabel(t)).join(', ')} … (${preview.length} doses/day)';
         return [
           _label('First Dose Time', labelColor),
           const SizedBox(height: 8),
           _timeTile(
-            label:
-                'First dose at ${_timeLabel(_intakeTimes[0])}, then every $_freqNumber hour${_freqNumber > 1 ? 's' : ''}',
+            label: 'First dose at ${_timeLabel(_intakeTimes[0])}, then every $_freqNumber hour${_freqNumber > 1 ? 's' : ''}',
             onTap: () => _pickDayTime(0),
             cardColor: cardColor,
             onSurface: onSurface,
             primary: cs.primary,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Schedule: $previewStr',
+            style: TextStyle(fontSize: 12, color: sublabelColor),
           ),
         ];
 

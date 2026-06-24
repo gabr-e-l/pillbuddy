@@ -155,6 +155,21 @@ class IntakeService {
     });
   }
 
+  /// One-time read of the current status for a single dose slot.
+  /// Returns null if no record exists yet.
+  /// Used by NotificationService.onAlarmFired() to avoid overwriting a
+  /// 'taken' or 'taken_late' record with 'skipped' at Stage 2.
+  Future<String?> getIntakeStatus({
+    required String medId,
+    int             timeIndex = 0,
+    DateTime?       date,
+  }) async {
+    final d    = date ?? DateTime.now();
+    final snap = await _intakesRef.doc(_docId(medId, timeIndex, d)).get();
+    if (!snap.exists) return null;
+    return snap.data()?['status'] as String?;
+  }
+
   /// Stream of { '{medId}_{timeIndex}' → status } for a given date.
   ///
   /// Keyed by the composite mapKey (not bare medId) so multiple intake
