@@ -18,6 +18,7 @@ import '../services/caregiver_service.dart';
 import '../services/auth_service.dart';
 import '../services/profile_service.dart';
 import '../services/notification_service.dart';
+import '../services/caregiver_intake_cache.dart';
 import 'add_patient_screen.dart';
 import 'caregiver_patient_meds_screen.dart';
 import 'caregiver_intake_history_screen.dart';
@@ -275,7 +276,6 @@ class _PatientCard extends StatefulWidget {
 class _PatientCardState extends State<_PatientCard> {
   final _service      = CaregiverService();
   final _notifService = NotificationService();
-  Map<String, String> _lastIntakes = {};
 
   @override
   void initState() {
@@ -311,19 +311,30 @@ class _PatientCardState extends State<_PatientCard> {
     );
   }
 
-  void _handleIntakeUpdate(
+  Future<void> _handleIntakeUpdate(
     Map<String, String> newIntakes,
     String patientUid,
     String patientName, {
     Map<String, String> medNames = const {},
-  }) {
+    required String date,
+  }) async {
+    final cache = CaregiverIntakeCache.instance;
     for (final entry in newIntakes.entries) {
       final medId  = entry.key;
       final status = entry.value;
-      if (_lastIntakes[medId] != status) {
-        if (status == 'taken' ||
-            status == 'taken_late' ||
-            status == 'skipped') {
+      if (status == 'taken' ||
+          status == 'taken_late' ||
+          status == 'skipped') {
+        // shouldNotify() checks the singleton cache (backed by
+        // SharedPreferences) and returns true only when the status is
+        // genuinely new — survives navigation, rebuilds AND cold restarts.
+        final notify = await cache.shouldNotify(
+          patientUid: patientUid,
+          medId:      medId,
+          date:       date,
+          status:     status,
+        );
+        if (notify) {
           _notifService.notifyCaregiverIntakeUpdate(
             patientUid:  patientUid,
             patientName: patientName,
@@ -334,7 +345,6 @@ class _PatientCardState extends State<_PatientCard> {
         }
       }
     }
-    _lastIntakes = Map.from(newIntakes);
   }
 
   @override
@@ -444,52 +454,52 @@ class _PatientCardState extends State<_PatientCard> {
                   ),
                   const SizedBox(height: 8),
                   // Silent intake notification listener
-                  StreamBuilder<List<Map<String, dynamic>>>(
-                    stream: FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(patientUid)
-                        .collection('intakes')
-                        .where('date', isEqualTo: () {
-                          final n  = DateTime.now();
-                          final mo = n.month.toString().padLeft(2, '0');
-                          final dy = n.day.toString().padLeft(2, '0');
-                          return '${n.year}-$mo-$dy';
-                        }())
-                        .snapshots()
-                        .map((s) =>
-                            s.docs.map((d) => d.data()).toList()),
-                    builder: (context, intakeSnap) {
-                      if (intakeSnap.hasData) {
-                        final docs      = intakeSnap.data!;
-                        final statusMap = <String, String>{
-                          for (final d in docs)
-                            if (d['medId'] != null &&
-                                d['status'] != null)
-                              d['medId'] as String:
-                                  d['status'] as String,
-                        };
-                        final nameMap = <String, String>{
-                          for (final d in docs)
-                            if (d['medId'] != null &&
-                                d['medName'] != null)
-                              d['medId'] as String:
-                                  d['medName'] as String,
-                        };
-                        WidgetsBinding.instance
-                            .addPostFrameCallback((_) {
-                          if (mounted) {
-                            _handleIntakeUpdate(
-                              statusMap,
-                              patientUid,
-                              patientName,
-                              medNames: nameMap,
-                            );
-                          }
-                        });
-                      }
-                      return const SizedBox.shrink();
-                    },
-                  ),
+                  Builder(builder: (context) {
+                    final n      = DateTime.now();
+                    final today  = '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
+                    return StreamBuilder<List<Map<String, dynamic>>>(
+                      stream: FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(patientUid)
+                          .collection('intakes')
+                          .where('date', isEqualTo: today)
+                          .snapshots()
+                          .map((s) =>
+                              s.docs.map((d) => d.data()).toList()),
+                      builder: (context, intakeSnap) {
+                        if (intakeSnap.hasData) {
+                          final docs      = intakeSnap.data!;
+                          final statusMap = <String, String>{
+                            for (final d in docs)
+                              if (d['medId'] != null &&
+                                  d['status'] != null)
+                                d['medId'] as String:
+                                    d['status'] as String,
+                          };
+                          final nameMap = <String, String>{
+                            for (final d in docs)
+                              if (d['medId'] != null &&
+                                  d['medName'] != null)
+                                d['medId'] as String:
+                                    d['medName'] as String,
+                          };
+                          WidgetsBinding.instance
+                              .addPostFrameCallback((_) {
+                            if (mounted) {
+                              _handleIntakeUpdate(
+                                statusMap,
+                                patientUid,
+                                patientName,
+                                medNames: nameMap,
+                                date: today,
+                              );
+                            }
+                          });
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    );
+                  }),
                   // Intake Updates quick-link
                   GestureDetector(
                     onTap: () => Navigator.push(

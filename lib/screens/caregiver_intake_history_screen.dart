@@ -32,6 +32,8 @@ class IntakeRecord {
   final String    status;      // taken | taken_late | skipped
   final String    date;        // yyyy-MM-dd
   final DateTime? recordedAt;
+  /// 0-based index into the medication's intakeTimes list.
+  final int       timeIndex;
 
   const IntakeRecord({
     required this.medId,
@@ -39,6 +41,7 @@ class IntakeRecord {
     required this.status,
     required this.date,
     this.recordedAt,
+    this.timeIndex = 0,
   });
 
   factory IntakeRecord.fromDoc(DocumentSnapshot doc) {
@@ -48,6 +51,7 @@ class IntakeRecord {
       medName:    d['medName']    as String? ?? 'Unknown',
       status:     d['status']     as String? ?? 'unknown',
       date:       d['date']       as String? ?? '',
+      timeIndex:  (d['timeIndex'] as num?)?.toInt() ?? 0,
       recordedAt: d['recordedAt'] != null
           ? (d['recordedAt'] as Timestamp).toDate()
           : null,
@@ -80,6 +84,14 @@ class _CaregiverIntakeReader {
         .map((snap) => snap.docs
           .map((d) => MedicationModel.fromDoc(d))
           .toList());
+  }
+
+  /// Live stream of medId → MedicationModel for quick intake-time lookups.
+  Stream<Map<String, MedicationModel>> medsMapStreamForPatient(
+      String patientUid) {
+    return medsStreamForPatient(patientUid).map(
+      (list) => {for (final m in list) if (m.id != null) m.id!: m},
+    );
   }
 }
 
@@ -188,6 +200,7 @@ class _CaregiverIntakeHistoryScreenState
 
   Future<void> _pickCustomRange() async {
     final now   = DateTime.now();
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final range = await showDateRangePicker(
       context: context,
       firstDate: DateTime(now.year - 2),
@@ -195,11 +208,36 @@ class _CaregiverIntakeHistoryScreenState
       initialDateRange: _customRange ??
           DateTimeRange(
               start: now.subtract(const Duration(days: 7)), end: now),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx)
-            .copyWith(colorScheme: const ColorScheme.light(primary: _teal)),
-        child: child!,
-      ),
+      builder: (ctx, child) {
+        final baseScheme = isDarkMode
+            ? ColorScheme.dark(
+                primary:   _teal,
+                onPrimary: Colors.black,
+                surface:   const Color(0xFF1E1E2E),
+                onSurface: Colors.white,
+              )
+            : ColorScheme.light(
+                primary:   _teal,
+                onPrimary: Colors.white,
+                surface:   Colors.white,
+                onSurface: Colors.black87,
+              );
+        return Theme(
+          data: Theme.of(ctx).copyWith(
+            colorScheme: baseScheme,
+            scaffoldBackgroundColor:
+                isDarkMode ? const Color(0xFF121212) : Colors.white,
+            dialogBackgroundColor:
+                isDarkMode ? const Color(0xFF1E1E2E) : Colors.white,
+            textButtonTheme: TextButtonThemeData(
+              style: TextButton.styleFrom(
+                foregroundColor: _teal,
+              ),
+            ),
+          ),
+          child: child!,
+        );
+      },
     );
     if (range != null) {
       setState(() {
@@ -217,65 +255,87 @@ class _CaregiverIntakeHistoryScreenState
     showModalBottomSheet(
       context:  context,
       backgroundColor: sheetBg,
+      // isScrollControlled lets the sheet grow beyond 50% of screen height.
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 36, height: 4,
-              decoration: BoxDecoration(
-                  color: isDark ? Colors.white24 : Colors.grey[300],
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('Filter by Medication',
-                    style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: onSheet)),
-              ),
-            ),
-            const SizedBox(height: 8),
-            ListTile(
-              leading: const Icon(Icons.medication_outlined, color: _teal),
-              title:   Text('All Medications',
-                  style: TextStyle(color: onSheet)),
-              trailing: _selectedMedId == null
-                  ? const Icon(Icons.check, color: _teal)
-                  : null,
-              onTap: () {
-                setState(() { _selectedMedId = null; _selectedMedName = null; });
-                Navigator.pop(ctx);
-              },
-            ),
-            ...meds.map((m) => ListTile(
-                  leading: Icon(Icons.medication,
-                      color: isDark ? Colors.white54 : Colors.black45),
-                  title: Text(m.name,
-                      style: TextStyle(color: onSheet),
-                      overflow: TextOverflow.ellipsis),
-                  trailing: _selectedMedId == m.id
+      builder: (ctx) {
+        // Cap the sheet at 70% of the screen so it never overflows on any
+        // device, and add a scrollable list to handle many medications.
+        final maxHeight = MediaQuery.of(ctx).size.height * 0.70;
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxHeight),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                      color: isDark ? Colors.white24 : Colors.grey[300],
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Filter by Medication',
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: onSheet)),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // "All Medications" is always pinned at top
+                ListTile(
+                  leading: const Icon(Icons.medication_outlined, color: _teal),
+                  title:   Text('All Medications',
+                      style: TextStyle(color: onSheet)),
+                  trailing: _selectedMedId == null
                       ? const Icon(Icons.check, color: _teal)
                       : null,
                   onTap: () {
-                    setState(() {
-                      _selectedMedId   = m.id;
-                      _selectedMedName = m.name;
-                    });
+                    setState(() { _selectedMedId = null; _selectedMedName = null; });
                     Navigator.pop(ctx);
                   },
-                )),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
+                ),
+                const Divider(height: 1),
+                // Scrollable medication list — handles any number of entries
+                Flexible(
+                  child: ListView.builder(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    shrinkWrap: true,
+                    itemCount: meds.length,
+                    itemBuilder: (_, i) {
+                      final m = meds[i];
+                      return ListTile(
+                        leading: Icon(Icons.medication,
+                            color: isDark ? Colors.white54 : Colors.black45),
+                        title: Text(m.name,
+                            style: TextStyle(color: onSheet),
+                            overflow: TextOverflow.ellipsis),
+                        trailing: _selectedMedId == m.id
+                            ? const Icon(Icons.check, color: _teal)
+                            : null,
+                        onTap: () {
+                          setState(() {
+                            _selectedMedId   = m.id;
+                            _selectedMedName = m.name;
+                          });
+                          Navigator.pop(ctx);
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -327,13 +387,51 @@ class _CaregiverIntakeHistoryScreenState
     return '${months[d.month]} ${d.day}, ${d.year}';
   }
 
-  String _timeOf(IntakeRecord r) {
-    final t = r.recordedAt;
-    if (t == null) return '';
-    final h = t.hour > 12 ? t.hour - 12 : (t.hour == 0 ? 12 : t.hour);
-    final m = t.minute.toString().padLeft(2, '0');
-    final p = t.hour >= 12 ? 'PM' : 'AM';
-    return '$h:$m $p';
+  String _timeOf(IntakeRecord r,
+      {Map<String, MedicationModel> medsMap = const {}}) {
+    // Build two time labels:
+    //   scheduledLabel — the configured dose time from the medication's
+    //                    intakeTimes[timeIndex], e.g. "8:00 AM"
+    //   actualLabel    — when the status was actually recorded in Firestore
+    //
+    // Showing both gives the caregiver full context: what time the dose
+    // was supposed to be taken vs. when it was actually logged.
+
+    String? scheduledLabel;
+    final med = medsMap[r.medId];
+    if (med != null) {
+      final times = med.intakeTimes;
+      if (times.isNotEmpty) {
+        final idx = r.timeIndex.clamp(0, times.length - 1);
+        final t   = times[idx];
+        final sh  = (t['hour']   as num?)?.toInt() ?? med.hour;
+        final sm  = (t['minute'] as num?)?.toInt() ?? med.minute;
+        final sp  = t['period']  as String?  ?? med.period;
+        scheduledLabel =
+            '${sh.toString().padLeft(2, '0')}:${sm.toString().padLeft(2, '0')} $sp';
+      } else {
+        // Fallback to legacy top-level fields
+        scheduledLabel =
+            '${med.hour.toString().padLeft(2, '0')}:${med.minute.toString().padLeft(2, '0')} ${med.period}';
+      }
+    }
+
+    String? actualLabel;
+    final rec = r.recordedAt;
+    if (rec != null) {
+      final ah = rec.hour > 12
+          ? rec.hour - 12
+          : (rec.hour == 0 ? 12 : rec.hour);
+      final am = rec.minute.toString().padLeft(2, '0');
+      final ap = rec.hour >= 12 ? 'PM' : 'AM';
+      actualLabel = '$ah:$am $ap';
+    }
+
+    if (scheduledLabel != null && actualLabel != null) {
+      if (scheduledLabel == actualLabel) return actualLabel; // no need to duplicate
+      return '$actualLabel (sched. $scheduledLabel)';
+    }
+    return actualLabel ?? scheduledLabel ?? '';
   }
 
   /// Returns counts for the three active statuses only.
@@ -426,6 +524,10 @@ class _CaregiverIntakeHistoryScreenState
               final counts   = _counts(filtered);
               final rate     = _adherenceRate(filtered);
 
+              final medsMap = {
+                for (final m in liveMeds) if (m.id != null) m.id!: m,
+              };
+
               return Column(
                 children: [
                   _buildFilterBar(liveMeds, isDark, cs),
@@ -439,7 +541,8 @@ class _CaregiverIntakeHistoryScreenState
                                 const EdgeInsets.fromLTRB(16, 4, 16, 24),
                             children: grouped.entries
                                 .map((e) => _buildDayGroup(
-                                    e.key, e.value, isDark, cs))
+                                    e.key, e.value, isDark, cs,
+                                    medsMap: medsMap))
                                 .toList(),
                           ),
                   ),
@@ -678,7 +781,8 @@ class _CaregiverIntakeHistoryScreenState
   // ── Day group ──────────────────────────────────────────────────────────────
 
   Widget _buildDayGroup(String dateStr, List<IntakeRecord> records,
-      bool isDark, ColorScheme cs) {
+      bool isDark, ColorScheme cs,
+      {Map<String, MedicationModel> medsMap = const {}}) {
     final taken = records
         .where((r) => r.status == 'taken' || r.status == 'taken_late')
         .length;
@@ -728,17 +832,18 @@ class _CaregiverIntakeHistoryScreenState
           ],
         ),
         const SizedBox(height: 8),
-        ...records.map((r) => _buildRecordCard(r, isDark, cs)),
+        ...records.map((r) => _buildRecordCard(r, isDark, cs, medsMap: medsMap)),
       ],
     );
   }
 
   Widget _buildRecordCard(
-      IntakeRecord r, bool isDark, ColorScheme cs) {
+      IntakeRecord r, bool isDark, ColorScheme cs,
+      {Map<String, MedicationModel> medsMap = const {}}) {
     final color     = _statusColor(r.status);
     final icon      = _statusIcon(r.status);
     final label     = _statusLabel(r.status);
-    final time      = _timeOf(r);
+    final time      = _timeOf(r, medsMap: medsMap);
     final cardColor = isDark ? const Color(0xFF1E1E2E) : Colors.white;
     final nameColor = cs.onSurface;
     final timeColor = cs.onSurface.withValues(alpha: 0.4);
@@ -781,30 +886,37 @@ class _CaregiverIntakeHistoryScreenState
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: nameColor)),
-                const SizedBox(height: 3),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: color.withValues(
-                        alpha: isDark ? 0.18 : 0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(label,
-                      style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: color)),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: color.withValues(
+                            alpha: isDark ? 0.18 : 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(label,
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: color)),
+                    ),
+                    if (time.isNotEmpty)
+                      Text(time,
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              color: timeColor)),
+                  ],
                 ),
               ],
             ),
           ),
-          if (time.isNotEmpty)
-            Text(time,
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: timeColor)),
         ],
       ),
     );

@@ -1,6 +1,7 @@
 // lib/services/auth_service.dart
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'caregiver_intake_cache.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -75,5 +76,10 @@ class AuthService {
 
   // ── Sign Out ───────────────────────────────────────────────────────────────
 
-  Future<void> signOut() async => _auth.signOut();
+  Future<void> signOut() async {
+    // Clear the caregiver intake cache (in-memory + SharedPreferences) so a
+    // fresh login doesn't inherit the previous session's seen-status map.
+    await CaregiverIntakeCache.instance.clear();
+    await _auth.signOut();
+  }
 }
