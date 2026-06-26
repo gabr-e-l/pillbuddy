@@ -52,10 +52,23 @@ class CaregiverService {
     final patientUid = patientDoc.id;
     final patientData = patientDoc.data();
 
-    // 2. Check not already linked
-    final existing = await _patientsRef.doc(patientUid).get();
-    if (existing.exists) {
-      throw Exception('This patient is already linked to your account.');
+    // 2. Check the patient isn't already linked to ANY caregiver — not just
+    //    this one. The patient's back-link subcollection
+    //    (users/{patientUid}/caregivers) is the source of truth for that,
+    //    since it's written for every caregiver who has ever linked them.
+    final existingCaregivers = await _db
+        .collection('users')
+        .doc(patientUid)
+        .collection('caregivers')
+        .limit(1)
+        .get();
+
+    if (existingCaregivers.docs.isNotEmpty) {
+      final alreadyLinkedToMe =
+          existingCaregivers.docs.first.id == _caregiverUid;
+      throw Exception(alreadyLinkedToMe
+          ? 'This patient is already linked to your account.'
+          : 'This patient is already linked to another caregiver.');
     }
 
     // 3. Write caregiver → patient link

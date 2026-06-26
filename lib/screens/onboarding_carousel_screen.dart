@@ -34,7 +34,7 @@ class _OnboardingCarouselState extends State<OnboardingCarousel> {
           'Take control of your well-being with effortless medication reminders.',
     ),
     OnboardingContent(
-      imageAsset: 'assets/images/app.png',
+      imageAsset: 'assets/images/app.jpg',
       title: 'Log Every Dose Quickly',
       subtitle:
           'Keep a digital history of your medications and supplement intake.',
@@ -171,7 +171,9 @@ class _OnboardingCarouselState extends State<OnboardingCarousel> {
             content.title,
             textAlign: TextAlign.center,
             style: const TextStyle(
-                fontSize: 26, fontWeight: FontWeight.bold),
+                fontSize: 26,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1A1A2E)),
           ),
           const SizedBox(height: 16),
           Text(

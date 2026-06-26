@@ -60,7 +60,7 @@ class OnboardingScreen extends StatelessWidget {
               child: Column(
                 children: [
                   Text(
-                    'For yourself, family and friends',
+                    'For your patients, family, and friends',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 25,

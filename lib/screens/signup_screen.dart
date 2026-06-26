@@ -670,62 +670,87 @@ class _GoogleLogo extends StatelessWidget {
 class _GoogleLogoPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final double s = size.width;
+    // Accurate vector reproduction of the official multi-colour Google "G"
+    // mark (18×18 design grid), scaled to fit the requested size. The
+    // previous implementation approximated the G with pie-slice arcs cut
+    // out by a white circle, which produced visible gaps/seams — this
+    // version uses the actual logo path geometry instead.
+    final double k = size.width / 18.0;
     final Paint p = Paint()..style = PaintingStyle.fill;
 
-    // Blue segment (top-right arc)
+    // Blue
     p.color = const Color(0xFF4285F4);
-    canvas.drawArc(
-      Rect.fromLTWH(0, 0, s, s),
-      -0.523599, // -30°
-      1.5708, // 90°
-      true,
+    canvas.drawPath(
+      Path()
+        ..moveTo(17.64 * k, 9.2045 * k)
+        ..cubicTo(17.64 * k, 8.5664 * k, 17.5827 * k, 7.9527 * k,
+            17.4764 * k, 7.3636 * k)
+        ..lineTo(9 * k, 7.3636 * k)
+        ..lineTo(9 * k, 10.845 * k)
+        ..lineTo(13.8436 * k, 10.845 * k)
+        ..cubicTo(13.635 * k, 11.97 * k, 13.0009 * k, 12.9232 * k,
+            12.0477 * k, 13.5614 * k)
+        ..lineTo(12.0477 * k, 15.8195 * k)
+        ..lineTo(14.9564 * k, 15.8195 * k)
+        ..cubicTo(16.6582 * k, 14.2527 * k, 17.64 * k, 11.9455 * k,
+            17.64 * k, 9.2045 * k)
+        ..close(),
       p,
     );
 
-    // Red segment (top-left arc)
-    p.color = const Color(0xFFEA4335);
-    canvas.drawArc(
-      Rect.fromLTWH(0, 0, s, s),
-      3.14159 + 0.523599, // 210°
-      1.0472, // 60°
-      true,
-      p,
-    );
-
-    // Yellow segment (bottom-left arc)
-    p.color = const Color(0xFFFBBC05);
-    canvas.drawArc(
-      Rect.fromLTWH(0, 0, s, s),
-      3.14159 - 0.523599, // 150° (going CW from bottom-left)
-      1.0472,
-      true,
-      p,
-    );
-
-    // Green segment (bottom-right arc)
+    // Green
     p.color = const Color(0xFF34A853);
-    canvas.drawArc(
-      Rect.fromLTWH(0, 0, s, s),
-      0, // 0°
-      0.523599, // 30°
-      true,
+    canvas.drawPath(
+      Path()
+        ..moveTo(9 * k, 18 * k)
+        ..cubicTo(11.43 * k, 18 * k, 13.4673 * k, 17.194 * k, 14.9564 * k,
+            15.8195 * k)
+        ..lineTo(12.0477 * k, 13.5614 * k)
+        ..cubicTo(11.2418 * k, 14.1018 * k, 10.2109 * k, 14.4219 * k,
+            9 * k, 14.4219 * k)
+        ..cubicTo(6.6555 * k, 14.4219 * k, 4.6718 * k, 12.8383 * k,
+            3.9636 * k, 10.7115 * k)
+        ..lineTo(0.9573 * k, 10.7115 * k)
+        ..lineTo(0.9573 * k, 13.0433 * k)
+        ..cubicTo(2.4382 * k, 15.9832 * k, 5.4818 * k, 18 * k, 9 * k, 18 * k)
+        ..close(),
       p,
     );
 
-    // White circle in centre
-    p.color = Colors.white;
-    canvas.drawCircle(
-      Offset(s / 2, s / 2),
-      s * 0.35,
+    // Yellow
+    p.color = const Color(0xFFFBBC05);
+    canvas.drawPath(
+      Path()
+        ..moveTo(3.9636 * k, 10.71 * k)
+        ..cubicTo(3.7836 * k, 10.1696 * k, 3.6813 * k, 9.5932 * k,
+            3.6813 * k, 9.0 * k)
+        ..cubicTo(3.6813 * k, 8.4068 * k, 3.7836 * k, 7.8304 * k,
+            3.9636 * k, 7.29 * k)
+        ..lineTo(3.9636 * k, 4.9582 * k)
+        ..lineTo(0.9573 * k, 4.9582 * k)
+        ..cubicTo(0.3477 * k, 6.1732 * k, 0.0, 7.5477 * k, 0.0, 9 * k)
+        ..cubicTo(0.0, 10.4523 * k, 0.3477 * k, 11.8268 * k, 0.9573 * k,
+            13.0418 * k)
+        ..lineTo(3.9636 * k, 10.71 * k)
+        ..close(),
       p,
     );
 
-    // Blue "G" bar
-    p.color = const Color(0xFF4285F4);
-    final barHeight = s * 0.18;
-    canvas.drawRect(
-      Rect.fromLTWH(s * 0.5, s / 2 - barHeight / 2, s * 0.45, barHeight),
+    // Red
+    p.color = const Color(0xFFEA4335);
+    canvas.drawPath(
+      Path()
+        ..moveTo(9 * k, 3.5795 * k)
+        ..cubicTo(10.3214 * k, 3.5795 * k, 11.5077 * k, 4.0336 * k,
+            12.4405 * k, 4.9255 * k)
+        ..lineTo(15.0218 * k, 2.3441 * k)
+        ..cubicTo(13.4632 * k, 0.8918 * k, 11.4259 * k, 0.0, 9 * k, 0.0)
+        ..cubicTo(5.4818 * k, 0.0, 2.4382 * k, 2.0168 * k, 0.9573 * k,
+            4.9582 * k)
+        ..lineTo(3.9636 * k, 7.29 * k)
+        ..cubicTo(4.6718 * k, 5.1632 * k, 6.6555 * k, 3.5795 * k, 9 * k,
+            3.5795 * k)
+        ..close(),
       p,
     );
   }

@@ -515,7 +515,7 @@ class _PatientCardState extends State<_PatientCard> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF3B71FE)
+                        color: const Color(0xFF2BC8A7)
                             .withValues(alpha: 0.08),
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -523,13 +523,13 @@ class _PatientCardState extends State<_PatientCard> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           const Icon(Icons.history_rounded,
-                              size: 13, color: Color(0xFF3B71FE)),
+                              size: 13, color: Color(0xFF2BC8A7)),
                           const SizedBox(width: 4),
                           Text(
                             'Intake Updates',
                             style: TextStyle(
                               fontSize: 11,
-                              color: const Color(0xFF3B71FE),
+                              color: const Color(0xFF2BC8A7),
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -811,13 +811,13 @@ class _CaregiverSettingsTab extends StatelessWidget {
               acc: acc,
               cs: cs,
               iconColor: cs.primary,
-              icon: Icons.notifications_outlined,
-              label: 'Notification Settings',
+              icon: Icons.accessibility_new_rounded,
+              label: 'Accessibility',
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) => const NotificationSettingsScreen(
-                      isCaregiverMode: true),
+                  builder: (_) =>
+                      const CaregiverAccessibilitySettingsScreen(),
                 ),
               ),
             ),
@@ -829,13 +829,13 @@ class _CaregiverSettingsTab extends StatelessWidget {
               acc: acc,
               cs: cs,
               iconColor: cs.primary,
-              icon: Icons.accessibility_new_rounded,
-              label: 'Accessibility',
+              icon: Icons.notifications_outlined,
+              label: 'Notification Settings',
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(
-                  builder: (_) =>
-                      const CaregiverAccessibilitySettingsScreen(),
+                  builder: (_) => const NotificationSettingsScreen(
+                      isCaregiverMode: true),
                 ),
               ),
             ),

@@ -936,7 +936,7 @@ class _MedCardState extends State<_MedCard> {
         'taken'      => const Color(0xFF2BC8A7),
         'taken_late' => const Color(0xFFFFA726),
         'skipped'    => const Color(0xFFEF5350),
-        _            => const Color(0xFF3B71FE),
+        _            => const Color(0xFF1A6BFF),
       };
 
   String get _statusLabel => switch (_localStatus) {
@@ -1439,8 +1439,19 @@ class _PatientSettingsTab extends StatelessWidget {
                   child: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                        color: surface,
-                        borderRadius: BorderRadius.circular(16)),
+                      color: surface,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(
+                              theme.brightness == Brightness.dark
+                                  ? 0.25
+                                  : 0.04),
+                          blurRadius: 6,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
                     child: Row(
                       children: [
                         avatar,
@@ -1549,13 +1560,23 @@ class _SettingsTile extends StatelessWidget {
     final theme   = Theme.of(context);
     final surface = theme.colorScheme.surface;
     final c       = color ?? theme.colorScheme.onSurface;
+    final isDark  = theme.brightness == Brightness.dark;
 
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-            color: surface, borderRadius: BorderRadius.circular(16)),
+          color: surface,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(isDark ? 0.25 : 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
         child: Row(
           children: [
             Icon(icon, color: c, size: 22),
