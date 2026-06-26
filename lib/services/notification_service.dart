@@ -329,10 +329,10 @@ class NotificationService {
 
   Future<String> _writeAppIconToTempFile() async {
     try {
-      final data = await rootBundle.load('assets/images/pb_icon.png');
+      final data = await rootBundle.load('assets/images/app_icon.png');
       final bytes = data.buffer.asUint8List();
       final dir = await Directory.systemTemp.createTemp('pillbuddy_icons_');
-      final file = File('${dir.path}/pb_icon.png');
+      final file = File('${dir.path}/app_icon.png');
       await file.writeAsBytes(bytes, flush: true);
       return file.path;
     } catch (e) {

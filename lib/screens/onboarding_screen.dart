@@ -38,7 +38,7 @@ class OnboardingScreen extends StatelessWidget {
             const SizedBox(height: 8),
 
             // Illustration
-            Expanded(child: _ProfileBubblesWidget()),
+            Expanded(child: _BrandMarkWidget()),
 
             // Dots
             const Row(
@@ -63,19 +63,19 @@ class OnboardingScreen extends StatelessWidget {
                     'For yourself, family and friends',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 22,
+                      fontSize: 25,
                       fontWeight: FontWeight.bold,
                       color: Colors.black87,
                       height: 1.3,
                     ),
                   ),
-                  SizedBox(height: 12),
+                  SizedBox(height: 14),
                   Text(
                     'Easily manage medication for everyone you care about with seamless profile switching.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.black45,
+                      fontSize: 17,
+                      color: Colors.black54,
                       height: 1.5,
                     ),
                   ),
@@ -90,7 +90,7 @@ class OnboardingScreen extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: SizedBox(
                 width: double.infinity,
-                height: 52,
+                height: 56,
                 child: ElevatedButton(
                   onPressed: () => Navigator.push(
                     context,
@@ -108,12 +108,12 @@ class OnboardingScreen extends StatelessWidget {
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.person_outline, color: Colors.white, size: 20),
+                      Icon(Icons.person_outline, color: Colors.white, size: 22),
                       SizedBox(width: 8),
                       Text(
                         'Sign up as Patient',
                         style: TextStyle(
-                          fontSize: 15,
+                          fontSize: 17,
                           fontWeight: FontWeight.w700,
                           color: Colors.white,
                         ),
@@ -124,14 +124,14 @@ class OnboardingScreen extends StatelessWidget {
               ),
             ),
 
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
 
             // ── Sign up as Caregiver ─────────────────────────────────────
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 32),
               child: SizedBox(
                 width: double.infinity,
-                height: 52,
+                height: 56,
                 child: OutlinedButton(
                   onPressed: () => Navigator.push(
                     context,
@@ -141,7 +141,7 @@ class OnboardingScreen extends StatelessWidget {
                   ),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(
-                        color: Color(0xFF1A6BFF), width: 1.5),
+                        color: Color(0xFF2BC8A7), width: 1.5),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(30),
                     ),
@@ -150,14 +150,14 @@ class OnboardingScreen extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(Icons.medical_services_outlined,
-                          color: Color(0xFF1A6BFF), size: 20),
+                          color: Color(0xFF2BC8A7), size: 22),
                       SizedBox(width: 8),
                       Text(
                         'Sign up as Caregiver',
                         style: TextStyle(
-                          fontSize: 15,
+                          fontSize: 17,
                           fontWeight: FontWeight.w700,
-                          color: Color(0xFF1A6BFF),
+                          color: Color(0xFF2BC8A7),
                         ),
                       ),
                     ],
@@ -174,7 +174,7 @@ class OnboardingScreen extends StatelessWidget {
               child: RichText(
                 text: TextSpan(
                   style: const TextStyle(
-                      fontSize: 14, color: Colors.black45),
+                      fontSize: 15, color: Colors.black54),
                   children: [
                     const TextSpan(text: 'Already have an account?  '),
                     TextSpan(
@@ -201,88 +201,64 @@ class OnboardingScreen extends StatelessWidget {
   }
 }
 
-// ── Profile bubbles illustration ──────────────────────────────────────────────
+// ── Brand mark illustration ────────────────────────────────────────────────
+// A clean, uncluttered visual built around PillBuddy's actual logo — no small
+// icons or busy overlapping circles, just one clear, high-contrast focal point.
 
-class _ProfileBubblesWidget extends StatelessWidget {
-  static const List<IconData> _icons = [
-    Icons.person,
-    Icons.elderly,
-    Icons.face,
-    Icons.person_2,
-  ];
-
+class _BrandMarkWidget extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
       child: SizedBox(
-        width: 280,
+        width: 260,
         height: 260,
         child: Stack(
           alignment: Alignment.center,
           children: [
-            _ring(220, const Color(0xFFDDE4F0)),
-            _ring(160, const Color(0xFFCDD7EE)),
-            Positioned(
-              top: 80, left: 90,
-              child: _bubble(88, _icons[3], false),
+            Container(
+              width: 240,
+              height: 240,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF3AC47D).withOpacity(0.08),
+              ),
             ),
-            Positioned(
-              top: 0, left: 110,
-              child: _bubble(56, _icons[0], false),
+            Container(
+              width: 185,
+              height: 185,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFF3AC47D).withOpacity(0.14),
+              ),
             ),
-            Positioned(
-              top: 90, left: 10,
-              child: _bubble(62, _icons[1], true),
-            ),
-            Positioned(
-              top: 70, right: 8,
-              child: _bubble(62, _icons[2], true),
+            Container(
+              width: 148,
+              height: 148,
+              padding: const EdgeInsets.all(30),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.10),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Image.asset(
+                'assets/images/pillbuddy_logo.png',
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) => const Icon(
+                  Icons.medication_liquid_outlined,
+                  size: 56,
+                  color: Color(0xFF3AC47D),
+                ),
+              ),
             ),
           ],
         ),
       ),
-    );
-  }
-
-  Widget _ring(double size, Color color) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color.withOpacity(0.45),
-        ),
-      );
-
-  Widget _bubble(double size, IconData icon, bool grey) {
-    Widget w = CircleAvatar(
-      radius: size / 2,
-      backgroundColor: const Color(0xFFCDD7EE),
-      child: Icon(icon, size: size * 0.45, color: Colors.white70),
-    );
-    if (grey) {
-      w = ColorFiltered(
-        colorFilter: const ColorFilter.matrix([
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0.2126, 0.7152, 0.0722, 0, 0,
-          0,      0,      0,      1, 0,
-        ]),
-        child: w,
-      );
-    }
-    return Container(
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: ClipOval(child: SizedBox(width: size, height: size, child: w)),
     );
   }
 }

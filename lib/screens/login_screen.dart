@@ -115,16 +115,29 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 32),
                       Center(
                         child: Container(
-                          width: 72,
-                          height: 72,
+                          width: 88,
+                          height: 88,
+                          padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF1A6BFF),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Icon(
-                            Icons.medication_liquid_outlined,
                             color: Colors.white,
-                            size: 40,
+                            borderRadius: BorderRadius.circular(22),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.08),
+                                blurRadius: 16,
+                                offset: const Offset(0, 6),
+                              ),
+                            ],
+                          ),
+                          child: Image.asset(
+                            'assets/images/pillbuddy_logo.png',
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) =>
+                                const Icon(
+                              Icons.medication_liquid_outlined,
+                              color: Color(0xFF2BC8A7),
+                              size: 40,
+                            ),
                           ),
                         ),
                       ),
@@ -239,9 +252,9 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: ElevatedButton(
                           onPressed: _isLoading ? null : _onSignIn,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF1A6BFF),
+                            backgroundColor: const Color(0xFF2BC8A7),
                             disabledBackgroundColor:
-                                const Color(0xFF1A6BFF).withOpacity(0.6),
+                                const Color(0xFF2BC8A7).withOpacity(0.6),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(30),
                             ),

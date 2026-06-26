@@ -129,7 +129,7 @@ class _OnboardingCarouselState extends State<OnboardingCarousel> {
                     height: 56,
                     child: ElevatedButton(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0D5BD7),
+                        backgroundColor: const Color(0xFF3AC47D),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(16)),
                         elevation: 0,
@@ -194,7 +194,7 @@ class _OnboardingCarouselState extends State<OnboardingCarousel> {
       width: _currentPage == index ? 24 : 8,
       decoration: BoxDecoration(
         color: _currentPage == index
-            ? const Color(0xFF0D5BD7)
+            ? const Color(0xFF3AC47D)
             : const Color(0xFFE0E0E0),
         borderRadius: BorderRadius.circular(4),
       ),
